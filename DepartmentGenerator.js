@@ -672,7 +672,33 @@ function onEdit(e) {
   }
 }
 
-/** * PART 3: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
+/** * PART 3: SHEET DELETION LISTENER
+ * onChange is a reserved simple trigger name — Google fires it automatically
+ * on any structural change (row/column inserts, sheet add/delete, etc.).
+ * No installation or setup needed.
+ */
+function onChange(e) {
+  if (!e || e.changeType !== "REMOVE_GRID") return;
+  autoUpdateSummarySheet();
+}
+
+/**
+ * Installs an installable onChange trigger as a fallback in case the simple
+ * trigger does not fire in certain deployment contexts.
+ * Run once from Report Automation > Setup Auto-Refresh.
+ */
+function setupOnChangeTrigger() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const alreadySet = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === "onChange");
+  if (!alreadySet) {
+    ScriptApp.newTrigger("onChange").forSpreadsheet(ss).onChange().create();
+    SpreadsheetApp.getUi().alert("Done! The Summary will now auto-refresh whenever a sheet is deleted.");
+  } else {
+    SpreadsheetApp.getUi().alert("Auto-refresh is already set up.");
+  }
+}
+
+/** * PART 4: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
  */
 function autoUpdateSummarySheet(newSheetName) {
   const ss = SpreadsheetApp.getActive();
