@@ -727,6 +727,19 @@ function autoUpdateSummarySheet(newSheetName) {
   checkAndTile();
 
   const settings = ss.getSheetByName("Settings");
+
+  // --- AUTO-CLEAN SETTINGS: Remove rows in Col H whose sheet no longer exists ---
+  const _preCleanRow = settings.getLastRow();
+  if (_preCleanRow >= 5) {
+    const _colH = settings.getRange(5, 8, _preCleanRow - 4, 1).getValues();
+    for (let i = _colH.length - 1; i >= 0; i--) {
+      const _ref = String(_colH[i][0]).trim();
+      if (_ref !== "" && !ss.getSheetByName(_ref)) {
+        settings.deleteRow(5 + i);
+      }
+    }
+  }
+
   const lastRow = settings.getLastRow();
 
   // --- UPDATED: Fetch Gross Multiplier from D2 ---
