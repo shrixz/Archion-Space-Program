@@ -1133,6 +1133,12 @@ function refreshAllDepartmentsFromMasterList() {
     const values = dataRange.getValues();
     const fontColors = dataRange.getFontColors();
 
+    // Read col H as rich-text values separately so the per-character red color
+    // (applied by onEdit for custom remark text after the second "|") is
+    // preserved on rows we're not actually changing.
+    const hRichRange = sheet.getRange(startRow, 8, numRows, 1);
+    const hRichValues = hRichRange.getRichTextValues();
+
     // Find "Total NSM" anchor within the read data
     let totalNSMIdx = -1;
     for (let i = 0; i < values.length; i++) {
@@ -1145,14 +1151,23 @@ function refreshAllDepartmentsFromMasterList() {
     // the current values so the single batched write doesn't disturb them.
     const ceWrite = [];
     const ceWriteColors = [];
-    const hWrite = [];
+    const hRichWrite = [];
     let touched = 0;
     let sheetPreserved = 0;
+
+    // Base style used only when we replace a remark with a fresh standard value
+    // — bakes in the consistent font family + size so the rebuilt cell matches.
+    const stdRemarkStyle = SpreadsheetApp.newTextStyle()
+      .setFontFamily(DEPT_ROW_FONT_FAMILY)
+      .setFontSize(DEPT_ROW_FONT_SIZE)
+      .setForegroundColor("black")
+      .build();
 
     for (let i = 0; i < dataRowCount; i++) {
       let c = values[i][2], d = values[i][3], e = values[i][4];
       let cColor = fontColors[i][2], dColor = fontColors[i][3], eColor = fontColors[i][4];
-      let h = values[i][7];
+      let hRich = hRichValues[i][0];
+      const hText = hRich ? hRich.getText() : "";
 
       const roomName = String(values[i][0] || "").trim();
       if (roomName) {
@@ -1164,11 +1179,16 @@ function refreshAllDepartmentsFromMasterList() {
           cColor = "#000000";
           eColor = "#000000";
 
-          const currentRemarks = String(h || "");
-          if (currentRemarks.indexOf(marker) === 0) {
+          if (hText.indexOf(marker) === 0) {
+            // Customized remark — keep the existing rich text value as-is so
+            // the red coloring on the user's custom text is preserved.
             sheetPreserved++;
           } else {
-            h = std.remarks;
+            // Refresh to the current standard remark with consistent styling.
+            const stdText = std.remarks || "";
+            const builder = SpreadsheetApp.newRichTextValue().setText(stdText);
+            if (stdText.length > 0) builder.setTextStyle(0, stdText.length, stdRemarkStyle);
+            hRich = builder.build();
           }
 
           touched++;
@@ -1177,18 +1197,20 @@ function refreshAllDepartmentsFromMasterList() {
 
       ceWrite.push([c, d, e]);
       ceWriteColors.push([cColor, dColor, eColor]);
-      hWrite.push([h]);
+      hRichWrite.push([hRich]);
     }
 
     if (touched > 0) {
       // ONE batched write per modified sheet for cols C-E (values + font colors)
-      // and ONE for col H. Cols F (Area) and G (Total NSM) keep their formulas.
+      // and ONE for col H (as rich text, so reds survive). Cols F (Area) and G
+      // (Total NSM) keep their formulas.
       sheet.getRange(startRow, 3, dataRowCount, 3).setValues(ceWrite).setFontColors(ceWriteColors);
-      sheet.getRange(startRow, 8, dataRowCount, 1).setValues(hWrite);
+      sheet.getRange(startRow, 8, dataRowCount, 1).setRichTextValues(hRichWrite);
 
-      // Batched consistent row styling for the full data area.
+      // Batched consistent row styling for the full data area. Uses the same
+      // constants as _applyConsistentRowStyle so font/size stays centralized.
       const styleRange = sheet.getRange(startRow, 1, dataRowCount, 8);
-      styleRange.setFontFamily("Arial").setFontSize(11).setVerticalAlignment("middle");
+      styleRange.setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setVerticalAlignment("middle");
       sheet.getRange(startRow, 1, dataRowCount, 1).setHorizontalAlignment("left");
       sheet.getRange(startRow, 2, dataRowCount, 6).setHorizontalAlignment("center");
       sheet.getRange(startRow, 8, dataRowCount, 1).setHorizontalAlignment("left");
