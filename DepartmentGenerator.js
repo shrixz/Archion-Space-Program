@@ -1,3 +1,32 @@
+/**
+ * Visual style constants for data rows in the Department Template and any
+ * generated department sheet. Centralized here so dropdown auto-populates,
+ * manual edits, and the generator all land on a single consistent look.
+ */
+const DEPT_ROW_FONT_FAMILY = "Arial";
+const DEPT_ROW_FONT_SIZE = 11;
+
+/**
+ * Enforce consistent visual formatting for a single data row (cols A-H).
+ * Applies font family, size, and per-column horizontal alignment so dropdown
+ * auto-populates and manual edits never leave behind mixed fonts/alignment.
+ * Intentionally does NOT touch font weight, font color, formulas, or rich
+ * text — those are managed by the room / sub-header / dimension / remarks
+ * logic and must be preserved.
+ */
+function _applyConsistentRowStyle(sheet, row) {
+  const fullRow = sheet.getRange(row, 1, 1, 8);
+  fullRow.setFontFamily(DEPT_ROW_FONT_FAMILY)
+         .setFontSize(DEPT_ROW_FONT_SIZE)
+         .setVerticalAlignment("middle");
+  // Column A (room name) — text, left-aligned
+  sheet.getRange(row, 1).setHorizontalAlignment("left");
+  // Columns B-G (qty, length, "x", width, area, NSM) — numbers/separator, centered
+  sheet.getRange(row, 2, 1, 6).setHorizontalAlignment("center");
+  // Column H (remarks) — text, left-aligned
+  sheet.getRange(row, 8).setHorizontalAlignment("left");
+}
+
 /** * PART 1: THE MODIFIED GENERATOR
  */
 function generateDeptMimicLobby() {
@@ -67,6 +96,7 @@ function generateDeptMimicLobby() {
       if (qty === "" || qty === null || qty === 0) {
         newSheet.getRange(i, 1, 1, 8).setFontWeight("bold");
         newSheet.getRange(i, 6, 1, 2).clearContent(); // Clear formulas so it doesn't show 0
+        _applyConsistentRowStyle(newSheet, i);
         continue;
       }
 
@@ -99,6 +129,8 @@ function generateDeptMimicLobby() {
           }
         }
       }
+
+      _applyConsistentRowStyle(newSheet, i);
     }
   }
 
@@ -255,6 +287,11 @@ function onEdit(e) {
     // Upper bound uses lastDataRow (dynamic) instead of hardcoded 28
     if (row >= startRow && row <= lastDataRow) {
 
+      // Normalize font / size / alignment first so every subsequent value or
+      // rich-text write below lands on a consistent style. Runs for any edit
+      // (dropdown pick, manual typing, paste) within the data range.
+      _applyConsistentRowStyle(sheet, row);
+
       // Auto-populate ONLY when Column A is selected
       if (col === 1) {
         const roomName = range.getValue().toString().trim();
@@ -403,15 +440,15 @@ function onEdit(e) {
 
         if (customPipeIndex !== -1) {
           const richText = SpreadsheetApp.newRichTextValue().setText(currentRemarks);
-          const defaultStyle = SpreadsheetApp.newTextStyle().setForegroundColor("black").build();
-          const redStyle = SpreadsheetApp.newTextStyle().setForegroundColor("red").build();
+          const defaultStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("black").build();
+          const redStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("red").build();
 
           richText.setTextStyle(0, customPipeIndex, defaultStyle);
           richText.setTextStyle(customPipeIndex, currentRemarks.length, redStyle);
           remarksCell.setRichTextValue(richText.build());
         } else {
           const richText = SpreadsheetApp.newRichTextValue().setText(currentRemarks);
-          const defaultStyle = SpreadsheetApp.newTextStyle().setForegroundColor("black").build();
+          const defaultStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("black").build();
           richText.setTextStyle(0, currentRemarks.length, defaultStyle);
           remarksCell.setRichTextValue(richText.build());
         }
@@ -460,6 +497,10 @@ function onEdit(e) {
 
   // Track changes only within the room data range (dynamic upper bound)
   if (row >= genStartRow && row <= genLastDataRow && col >= 1 && col <= 8) {
+
+    // Normalize font / size / alignment first so every subsequent value or
+    // rich-text write below lands on a consistent style.
+    _applyConsistentRowStyle(sheet, row);
 
     // REQ 1: COPIED TEMPLATE LOGIC SO GENERATED SHEET CALCULATES WHEN QTY IS EDITED
     if (col === 1) {
@@ -587,15 +628,15 @@ function onEdit(e) {
 
       if (customPipeIndex !== -1) {
         const richText = SpreadsheetApp.newRichTextValue().setText(currentRemarks);
-        const defaultStyle = SpreadsheetApp.newTextStyle().setForegroundColor("black").build();
-        const redStyle = SpreadsheetApp.newTextStyle().setForegroundColor("red").build();
+        const defaultStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("black").build();
+        const redStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("red").build();
 
         richText.setTextStyle(0, customPipeIndex, defaultStyle);
         richText.setTextStyle(customPipeIndex, currentRemarks.length, redStyle);
         remarksCell.setRichTextValue(richText.build());
       } else {
         const richText = SpreadsheetApp.newRichTextValue().setText(currentRemarks);
-        const defaultStyle = SpreadsheetApp.newTextStyle().setForegroundColor("black").build();
+        const defaultStyle = SpreadsheetApp.newTextStyle().setFontFamily(DEPT_ROW_FONT_FAMILY).setFontSize(DEPT_ROW_FONT_SIZE).setForegroundColor("black").build();
         richText.setTextStyle(0, currentRemarks.length, defaultStyle);
         remarksCell.setRichTextValue(richText.build());
       }
