@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Visual style constants for data rows in the Department Template and any
  * generated department sheet. Centralized here so dropdown auto-populates,
  * manual edits, and the generator all land on a single consistent look.
@@ -11,7 +11,7 @@ const DEPT_ROW_FONT_SIZE = 11;
  * Applies font family, size, and per-column horizontal alignment so dropdown
  * auto-populates and manual edits never leave behind mixed fonts/alignment.
  * Intentionally does NOT touch font weight, font color, formulas, or rich
- * text — those are managed by the room / sub-header / dimension / remarks
+ * text â€” those are managed by the room / sub-header / dimension / remarks
  * logic and must be preserved.
  */
 function _applyConsistentRowStyle(sheet, row) {
@@ -19,11 +19,11 @@ function _applyConsistentRowStyle(sheet, row) {
   fullRow.setFontFamily(DEPT_ROW_FONT_FAMILY)
          .setFontSize(DEPT_ROW_FONT_SIZE)
          .setVerticalAlignment("middle");
-  // Column A (room name) — text, left-aligned
+  // Column A (room name) â€” text, left-aligned
   sheet.getRange(row, 1).setHorizontalAlignment("left");
-  // Columns B-G (qty, length, "x", width, area, NSM) — numbers/separator, centered
+  // Columns B-G (qty, length, "x", width, area, NSM) â€” numbers/separator, centered
   sheet.getRange(row, 2, 1, 6).setHorizontalAlignment("center");
-  // Column H (remarks) — text, left-aligned
+  // Column H (remarks) â€” text, left-aligned
   sheet.getRange(row, 8).setHorizontalAlignment("left");
 }
 
@@ -85,7 +85,7 @@ function generateDeptMimicLobby() {
 
   let lastUsedRow = startRow;
 
-  // 1. Process Rooms, Area (F), and Total NSM (G) — loop covers all data rows dynamically
+  // 1. Process Rooms, Area (F), and Total NSM (G) â€” loop covers all data rows dynamically
   for (let i = startRow; i <= maxRoomRow; i++) {
     const roomName = newSheet.getRange(i, 1).getValue();
     const qty = newSheet.getRange(i, 2).getValue();
@@ -149,7 +149,7 @@ function generateDeptMimicLobby() {
   const rowTotalGSM   = labelRowNSM + 3;
   const lastDataRow   = labelRowNSM - 1; // last actual data row (row just above "Total NSM")
 
-  // 4. Summary Section Formulas — SUMIFS range is now fully dynamic
+  // 4. Summary Section Formulas â€” SUMIFS range is now fully dynamic
   newSheet.getRange(labelRowNSM, 7).setFormula(`=SUMIFS(G${startRow}:G${lastDataRow}, H${startRow}:H${lastDataRow}, "<>*Not a room*")`);
 
   const factorCell = newSheet.getRange(rowCircFactor, 7);
@@ -267,7 +267,7 @@ function onEdit(e) {
     }
 
     // --- DYNAMICALLY FIND TEMPLATE BOUNDS FOR THIS EDIT ---
-    // Scan column A once to locate "Total NSM" — this anchors all row references
+    // Scan column A once to locate "Total NSM" â€” this anchors all row references
     // so that any rows inserted in the data area (9 to N) are correctly handled.
     const tmplColA = sheet.getRange("A:A").getValues();
     let labelRowNSM = 0;
@@ -455,7 +455,7 @@ function onEdit(e) {
       }
     }
 
-    // REQ 7: Circulation Factor Color Toggle — uses dynamic rowCircFactor instead of hardcoded 30
+    // REQ 7: Circulation Factor Color Toggle â€” uses dynamic rowCircFactor instead of hardcoded 30
     if (row === rowCircFactor && col === 7) {
       const val = range.getValue();
       // Keeps text red if it is exactly 0% (0) or empty. Otherwise turns black.
@@ -480,7 +480,7 @@ function onEdit(e) {
   if (excludedSheets.indexOf(sheetName) > -1) return;
 
   // --- DYNAMICALLY FIND GENERATED SHEET BOUNDS FOR THIS EDIT ---
-  // Scan column A to locate "Total NSM" — handles rows inserted by users after generation.
+  // Scan column A to locate "Total NSM" â€” handles rows inserted by users after generation.
   const genColA = sheet.getRange("A:A").getValues();
   let genLabelRowNSM = 0;
   const genStartRow = 9;
@@ -698,7 +698,7 @@ function onEdit(e) {
     }
   }
 
-  // REQ 7 (Mimicked for Generated Sheet): Circulation Factor Color Toggle — uses dynamic genRowCircFactor
+  // REQ 7 (Mimicked for Generated Sheet): Circulation Factor Color Toggle â€” uses dynamic genRowCircFactor
   if (row === genRowCircFactor && col === 7) {
     const val = range.getValue();
     // Keeps text red if it is exactly 0% (0) or empty. Otherwise turns black.
@@ -717,7 +717,7 @@ function onEdit(e) {
 }
 
 /** * PART 3: SHEET DELETION LISTENER
- * onChange is a reserved simple trigger name — Google fires it automatically
+ * onChange is a reserved simple trigger name â€” Google fires it automatically
  * on any structural change (row/column inserts, sheet add/delete, etc.).
  * No installation or setup needed.
  */
@@ -733,7 +733,7 @@ function onChange(e) {
 }
 
 /**
- * Snapshot helpers — track {sheetId: name} for sheets tagged as GENERATED_DEPT.
+ * Snapshot helpers â€” track {sheetId: name} for sheets tagged as GENERATED_DEPT.
  * Sheet IDs are stable across renames, so comparing the current name against
  * the stored name for the same ID lets us detect a rename event.
  */
@@ -779,7 +779,7 @@ function detectGeneratedSheetRenames() {
   const ss = SpreadsheetApp.getActive();
   let snapshot = _getGenSheetSnapshot();
 
-  // First-run bootstrap: no snapshot yet — populate and exit silently
+  // First-run bootstrap: no snapshot yet â€” populate and exit silently
   if (snapshot === null) {
     _saveGenSheetSnapshot(_buildGenSheetSnapshot());
     return false;
@@ -1061,4 +1061,157 @@ function autoUpdateSummarySheet(newSheetName) {
   }
 
   SpreadsheetApp.flush();
+}
+
+/**
+ * PART 5: REFRESH ROOMS FROM MASTER LIST
+ *
+ * Walks every generated department sheet (tagged with GENERATED_DEPT in H1) and
+ * re-pulls Length / Width / Remarks from the current Standard Room Size list
+ * for any room row whose name is in the master list.
+ *
+ * Behavior per row:
+ *   - Length (C), "x" (D), Width (E): overwritten with the current master value,
+ *     font color reset to black (matches new standard).
+ *   - Remarks (H): overwritten ONLY if it does not start with the "||| " marker.
+ *     A leading "||| " means the user customized that remark, so it is preserved.
+ *   - Rows whose room name is not in the master list (e.g. sub-headers or
+ *     user-typed custom rooms) are skipped untouched.
+ *
+ * Triggered from Report Automation > Refresh Rooms from Master List.
+ */
+function refreshAllDepartmentsFromMasterList() {
+  const ss = SpreadsheetApp.getActive();
+  const standardSheet = ss.getSheetByName("Standard Room Size");
+  const ui = SpreadsheetApp.getUi();
+
+  if (!standardSheet) {
+    ui.alert("'Standard Room Size' sheet not found.");
+    return;
+  }
+
+  const stdLastRow = standardSheet.getLastRow();
+  if (stdLastRow < 2) {
+    ui.alert("'Standard Room Size' has no data rows.");
+    return;
+  }
+
+  // Build lookup ONCE: lowercased room name -> { len, wid, remarks }
+  const standards = standardSheet.getRange(2, 1, stdLastRow - 1, 5).getValues();
+  const lookup = {};
+  for (const r of standards) {
+    const name = (r[1] == null ? "" : String(r[1])).trim().toLowerCase();
+    if (!name) continue;
+    lookup[name] = {
+      len: r[2],
+      wid: r[3],
+      remarks: r[4] == null ? "" : String(r[4])
+    };
+  }
+
+  const marker = "||| ";
+  const startRow = 9;
+  let sheetCount = 0;
+  let roomCount = 0;
+  let remarksPreserved = 0;
+  const updatedSheets = [];
+
+  ss.getSheets().forEach(sheet => {
+    let isGen = false;
+    try { if (sheet.getRange("H1").getValue() === "GENERATED_DEPT") isGen = true; } catch (e) {}
+    if (!isGen) return;
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < startRow) return;
+
+    const numRows = lastRow - startRow + 1;
+
+    // ONE batched read of cols A-H for the whole data area (cols F and G
+    // contain formulas — we read their computed values but never write back
+    // to F or G, so the formulas stay intact).
+    const dataRange = sheet.getRange(startRow, 1, numRows, 8);
+    const values = dataRange.getValues();
+    const fontColors = dataRange.getFontColors();
+
+    // Find "Total NSM" anchor within the read data
+    let totalNSMIdx = -1;
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]).trim() === "Total NSM") { totalNSMIdx = i; break; }
+    }
+    const dataRowCount = totalNSMIdx >= 0 ? totalNSMIdx : values.length;
+    if (dataRowCount <= 0) return;
+
+    // Build write arrays for cols C-E and H. For unmatched rows we write back
+    // the current values so the single batched write doesn't disturb them.
+    const ceWrite = [];
+    const ceWriteColors = [];
+    const hWrite = [];
+    let touched = 0;
+    let sheetPreserved = 0;
+
+    for (let i = 0; i < dataRowCount; i++) {
+      let c = values[i][2], d = values[i][3], e = values[i][4];
+      let cColor = fontColors[i][2], dColor = fontColors[i][3], eColor = fontColors[i][4];
+      let h = values[i][7];
+
+      const roomName = String(values[i][0] || "").trim();
+      if (roomName) {
+        const std = lookup[roomName.toLowerCase()];
+        if (std) {
+          c = std.len;
+          d = "x";
+          e = std.wid;
+          cColor = "#000000";
+          eColor = "#000000";
+
+          const currentRemarks = String(h || "");
+          if (currentRemarks.indexOf(marker) === 0) {
+            sheetPreserved++;
+          } else {
+            h = std.remarks;
+          }
+
+          touched++;
+        }
+      }
+
+      ceWrite.push([c, d, e]);
+      ceWriteColors.push([cColor, dColor, eColor]);
+      hWrite.push([h]);
+    }
+
+    if (touched > 0) {
+      // ONE batched write per modified sheet for cols C-E (values + font colors)
+      // and ONE for col H. Cols F (Area) and G (Total NSM) keep their formulas.
+      sheet.getRange(startRow, 3, dataRowCount, 3).setValues(ceWrite).setFontColors(ceWriteColors);
+      sheet.getRange(startRow, 8, dataRowCount, 1).setValues(hWrite);
+
+      // Batched consistent row styling for the full data area.
+      const styleRange = sheet.getRange(startRow, 1, dataRowCount, 8);
+      styleRange.setFontFamily("Arial").setFontSize(11).setVerticalAlignment("middle");
+      sheet.getRange(startRow, 1, dataRowCount, 1).setHorizontalAlignment("left");
+      sheet.getRange(startRow, 2, dataRowCount, 6).setHorizontalAlignment("center");
+      sheet.getRange(startRow, 8, dataRowCount, 1).setHorizontalAlignment("left");
+
+      sheetCount++;
+      roomCount += touched;
+      remarksPreserved += sheetPreserved;
+      updatedSheets.push(sheet.getName() + " (" + touched + ")");
+    }
+  });
+
+  SpreadsheetApp.flush();
+
+  if (sheetCount === 0) {
+    ui.alert("No generated department sheets needed updating.");
+    return;
+  }
+
+  ui.alert(
+    "Refresh complete.\n\n" +
+    "Sheets updated: " + sheetCount + "\n" +
+    "Rooms refreshed: " + roomCount + "\n" +
+    "Custom remarks preserved (|||): " + remarksPreserved + "\n\n" +
+    "Details:\n" + updatedSheets.join("\n")
+  );
 }
