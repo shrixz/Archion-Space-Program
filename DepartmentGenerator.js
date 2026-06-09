@@ -955,21 +955,42 @@ function autoUpdateSummarySheet(newSheetName) {
     return catA.localeCompare(catB, undefined, {numeric: true, sensitivity: 'base'});
   });
 
+  // PRE-PASS: build the set of categories that need a Sub-Total.
+  //
+  // The Sub-Total checkboxes live in the MASTER category list in Settings:
+  //   col B = master category name (e.g. "1.1 GENERAL")
+  //   col C = checkbox per master category
+  // This master list is separate from the per-department rows (which carry
+  // their own ASSIGNED category in col G + sheet name in col H). Master rows
+  // typically have no sheet name in col H, so they get filtered out of
+  // settingsData — which is why we re-read cols B/C straight from the sheet
+  // here. A department's col G value is matched against this master set when
+  // deciding whether its section gets a Sub-Total.
+  const subTotalCategories = new Set();
+  const _masterLastRow = settings.getLastRow();
+  if (_masterLastRow >= 5) {
+    const _masterRows = settings.getRange(5, 2, _masterLastRow - 4, 2).getValues();
+    _masterRows.forEach(r => {
+      const cat = String(r[0] || "").trim();   // col B
+      if (cat && _isSubtotalChecked(r[1])) {   // col C checkbox
+        subTotalCategories.add(cat);
+      }
+    });
+  }
+
   let lastSection = "";
   let grandTotalC = 0, grandTotalE = 0;
 
   let sectionTotalC = 0, sectionTotalE = 0;
-  let lastSectionNeedsSubtotal = false;
 
   settingsData.forEach((row) => {
-    const needsSubtotal = (row[1] === true || String(row[1]).toLowerCase() === 'true');
     const sectionFull = String(row[5]).trim();
     const sheetName = String(row[6]).trim();
     const displayRoomName = row[7] ? String(row[7]).trim() : sheetName;
 
     if (sectionFull !== lastSection) {
       if (lastSection !== "") {
-        if (lastSectionNeedsSubtotal) {
+        if (subTotalCategories.has(lastSection)) {
           currentRowInPage++;
           checkAndTile();
 
@@ -995,7 +1016,6 @@ function autoUpdateSummarySheet(newSheetName) {
       currentRowInPage++;
 
       lastSection = sectionFull;
-      lastSectionNeedsSubtotal = needsSubtotal;
       sectionTotalC = 0;
       sectionTotalE = 0;
     }
@@ -1031,7 +1051,7 @@ function autoUpdateSummarySheet(newSheetName) {
     currentRowInPage++;
   });
 
-  if (lastSection !== "" && lastSectionNeedsSubtotal) {
+  if (lastSection !== "" && subTotalCategories.has(lastSection)) {
     currentRowInPage++;
     checkAndTile();
 
@@ -1061,6 +1081,103 @@ function autoUpdateSummarySheet(newSheetName) {
   }
 
   SpreadsheetApp.flush();
+}
+
+/**
+ * Permissive checkbox check used by Sub-Total detection.
+ * Returns true for: boolean true, number 1, or any of the common truthy
+ * strings ("true", "1", "yes", "y", "x", "checked"), case-insensitive.
+ * Returns false for everything else (including blanks and the FALSE boolean).
+ */
+function _isSubtotalChecked(v) {
+  if (v === true) return true;
+  if (v === 1) return true;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'x' || s === 'checked';
+  }
+  return false;
+}
+
+/**
+ * DIAGNOSTIC: shows exactly what the script reads from Settings for Sub-Total
+ * detection, so we can tell whether the issue is the checkbox value, the
+ * category cell (col G), or something else. Run from Report Automation menu.
+ */
+function debugSubTotals() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActive();
+  const settings = ss.getSheetByName("Settings");
+  if (!settings) { ui.alert("'Settings' sheet not found."); return; }
+
+  const lastRow = settings.getLastRow();
+  if (lastRow < 5) { ui.alert("Settings has no data rows."); return; }
+
+  let lines = [];
+
+  // ----- MASTER LIST (col B + col C) -----
+  lines.push("MASTER CATEGORY LIST (col B = category, col C = checkbox)");
+  lines.push("Read straight from the sheet — no filtering.");
+  lines.push("");
+
+  const masterRows = settings.getRange(5, 2, lastRow - 4, 2).getValues();
+  const subTotalCategories = new Set();
+  let masterShown = 0;
+  masterRows.forEach((r, idx) => {
+    const cat = String(r[0] || "").trim();
+    const cVal = r[1];
+    if (!cat && (cVal === "" || cVal === null || cVal === undefined)) return; // blank line
+    masterShown++;
+    const cType = (cVal === null) ? "null" : (cVal === undefined ? "undefined" : typeof cVal);
+    const checked = _isSubtotalChecked(cVal);
+    if (checked && cat) subTotalCategories.add(cat);
+    lines.push(
+      "  row " + (idx + 5) +
+      "  B=\"" + cat + "\"" +
+      "  C=" + JSON.stringify(cVal) + " (" + cType + ")" +
+      "  -> " + (checked ? "TICKED" : "not ticked")
+    );
+  });
+  if (masterShown === 0) lines.push("  (no master category rows found)");
+
+  // ----- DEPARTMENT ROWS (col G + col H) -----
+  lines.push("");
+  lines.push("DEPARTMENT ROWS (col G = assigned category, col H = sheet name)");
+  lines.push("These are the rows that actually appear on the Summary.");
+  lines.push("");
+
+  let deptRows = settings.getRange(5, 2, lastRow - 4, 8).getValues()
+    .filter(r => String(r[6]).trim() !== "");
+  deptRows = deptRows.filter(r => ss.getSheetByName(String(r[6]).trim()));
+
+  deptRows.forEach((r, idx) => {
+    const gVal = String(r[5] || "").trim();
+    const hVal = String(r[6] || "").trim();
+    const willGetSubTotal = subTotalCategories.has(gVal);
+    lines.push(
+      "  #" + (idx + 1) +
+      "  G=\"" + gVal + "\"" +
+      "  H=\"" + hVal + "\"" +
+      "  -> " + (willGetSubTotal ? "category is ticked, this section will get Sub-Total" : "category not ticked")
+    );
+  });
+
+  lines.push("");
+  lines.push("CATEGORIES THAT WILL GET A SUB-TOTAL ROW:");
+  if (subTotalCategories.size === 0) {
+    lines.push("  (none — no master category checkbox is ticked, OR none of the");
+    lines.push("   ticked master categories match any department's col G value)");
+  } else {
+    Array.from(subTotalCategories).forEach(c => lines.push("  - " + c));
+  }
+
+  const out = lines.join("\n");
+  const html = HtmlService.createHtmlOutput(
+    '<pre style="font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;margin:0">' +
+    out.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+    '</pre>'
+  ).setWidth(820).setHeight(560);
+  ui.showModalDialog(html, "Sub-Total Detection Debug");
 }
 
 /**
