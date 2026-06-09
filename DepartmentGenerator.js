@@ -156,7 +156,7 @@ function generateDeptMimicLobby() {
   factorCell.setNumberFormat("0%");
   factorCell.setFontWeight("bold");
 
-  newSheet.getRange(rowCircNSM, 7).setFormula(`=ROUND(G${labelRowNSM} * G${rowCircFactor}, 0)`);
+  newSheet.getRange(rowCircNSM, 7).setFormula(`=G${labelRowNSM} * G${rowCircFactor}`);
   newSheet.getRange(rowTotalGSM, 7).setFormula(`=G${labelRowNSM} + G${rowCircNSM}`);
 
   // Final Polish
@@ -332,7 +332,7 @@ function onEdit(e) {
         // Live calculation for the bottom Summary Block (fully dynamic range)
         if (labelRowNSM > 0) {
           sheet.getRange(labelRowNSM, 7).setFormula(`=SUMIFS(G${startRow}:G${lastDataRow}, H${startRow}:H${lastDataRow}, "<>*Not a room*")`).setNumberFormat("#,##0.00");
-          sheet.getRange(rowCircNSM, 7).setFormula(`=ROUND(G${labelRowNSM} * G${rowCircFactor}, 0)`).setNumberFormat("#,##0.00");
+          sheet.getRange(rowCircNSM, 7).setFormula(`=G${labelRowNSM} * G${rowCircFactor}`).setNumberFormat("#,##0.00");
           sheet.getRange(rowTotalGSM, 7).setFormula(`=G${labelRowNSM} + G${rowCircNSM}`).setNumberFormat("#,##0.00");
         }
       }
@@ -542,7 +542,7 @@ function onEdit(e) {
       // Live calculation for the bottom Summary Block (fully dynamic range)
       if (genLabelRowNSM > 0) {
         sheet.getRange(genLabelRowNSM, 7).setFormula(`=SUMIFS(G${genStartRow}:G${genLastDataRow}, H${genStartRow}:H${genLastDataRow}, "<>*Not a room*")`).setNumberFormat("#,##0.00");
-        sheet.getRange(genRowCircNSM, 7).setFormula(`=ROUND(G${genLabelRowNSM} * G${genRowCircFactor}, 0)`).setNumberFormat("#,##0.00");
+        sheet.getRange(genRowCircNSM, 7).setFormula(`=G${genLabelRowNSM} * G${genRowCircFactor}`).setNumberFormat("#,##0.00");
         sheet.getRange(genRowTotalGSM, 7).setFormula(`=G${genLabelRowNSM} + G${genRowCircNSM}`).setNumberFormat("#,##0.00");
       }
     }
