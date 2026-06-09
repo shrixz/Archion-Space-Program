@@ -26,7 +26,29 @@ function onOpen() {
     .addItem('Build Appendix', 'buildAppendixFromTemplate')
     .addItem('Refresh Sheet Names', 'refreshSheetNames')
     .addItem('Show Total GSM', 'showSidebar')
+    .addSeparator()
+    .addItem('Setup Auto-Refresh', 'setupOnChangeTrigger')
+    .addItem('Grant Permissions', 'requestPermissions')
     .addToUi();
+}
+
+function requestPermissions() {
+  const authInfo = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+  const status = authInfo.getAuthorizationStatus();
+
+  if (status === ScriptApp.AuthorizationStatus.REQUIRED) {
+    const authUrl = authInfo.getAuthorizationUrl();
+    const html = HtmlService.createHtmlOutput(
+      '<p style="font-family:Arial,sans-serif;font-size:13px;padding:10px">' +
+      'New permissions are required.<br><br>' +
+      '<a href="' + authUrl + '" target="_blank" ' +
+      'style="color:#1a73e8;font-weight:bold;font-size:14px">Click here to grant permissions</a><br><br>' +
+      'After approving, close this dialog and click <b>Setup Auto-Refresh</b> again.</p>'
+    ).setWidth(400).setHeight(130);
+    SpreadsheetApp.getUi().showModalDialog(html, 'Permission Required');
+  } else {
+    SpreadsheetApp.getUi().alert('All permissions are already granted! Now click Setup Auto-Refresh.');
+  }
 }
 
 /**
@@ -113,8 +135,21 @@ async function buildSummaryFromSettings() {
   checkAndTile();
   
   const settings = ss.getSheetByName("Settings");
+
+  // --- AUTO-CLEAN SETTINGS: Remove rows in Col H whose sheet no longer exists ---
+  const _preCleanRow = settings.getLastRow();
+  if (_preCleanRow >= 5) {
+    const _colH = settings.getRange(5, 8, _preCleanRow - 4, 1).getValues();
+    for (let i = _colH.length - 1; i >= 0; i--) {
+      const _ref = String(_colH[i][0]).trim();
+      if (_ref !== "" && !ss.getSheetByName(_ref)) {
+        settings.deleteRow(5 + i);
+      }
+    }
+  }
+
   const lastRow = settings.getLastRow();
-  
+
   // --- NEW: Fetch and Format Header Data for Appendix ---
   const rawDate = settings.getRange("C4").getValue();
   let headerDate = "";
@@ -273,7 +308,7 @@ async function buildSummaryFromSettings() {
   const allBlobs = [];
 
   const exportLastRow = (currentPage * PAGE_HEIGHT) + PAGE_HEIGHT;
-  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.25&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=8`;
+  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.1&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=8`;
   const summaryBlob = fetchWithRetry(summaryUrl, token);
   allBlobs.push(summaryBlob.setName("Summary.pdf"));
 

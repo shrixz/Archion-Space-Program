@@ -199,6 +199,9 @@ function generateDeptMimicLobby() {
   // TAG THE SHEET AS GENERATED (Placed securely in H1 so it doesn't auto-expand columns to ZZ!)
   newSheet.getRange("H1").setValue("GENERATED_DEPT").setFontColor("white");
 
+  // --- NEW: Track this sheet's id->name so future renames can be detected and propagated ---
+  _saveGenSheetSnapshot(_buildGenSheetSnapshot());
+
   ss.setActiveSheet(newSheet);
   SpreadsheetApp.getUi().alert("Finished! Sheet '" + deptName + "' is ready. Post-generation edits will be tracked, and the Summary has been automatically updated.");
 }
@@ -672,7 +675,143 @@ function onEdit(e) {
   }
 }
 
-/** * PART 3: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
+/** * PART 3: SHEET DELETION LISTENER
+ * onChange is a reserved simple trigger name — Google fires it automatically
+ * on any structural change (row/column inserts, sheet add/delete, etc.).
+ * No installation or setup needed.
+ */
+function onChange(e) {
+  if (!e || !e.changeType) return;
+
+  // NEW: Detect when a generated sheet was renamed (e.g., "Shane" -> "Shane First").
+  // If so, update Settings col H to match the new name and refresh the Summary.
+  const renameHandled = detectGeneratedSheetRenames();
+
+  // Existing behavior: refresh summary when a sheet is deleted
+  if (e.changeType === "REMOVE_GRID" && !renameHandled) autoUpdateSummarySheet();
+}
+
+/**
+ * Snapshot helpers — track {sheetId: name} for sheets tagged as GENERATED_DEPT.
+ * Sheet IDs are stable across renames, so comparing the current name against
+ * the stored name for the same ID lets us detect a rename event.
+ */
+function _GEN_SNAPSHOT_KEY() { return "GEN_SHEET_NAME_SNAPSHOT_V1"; }
+
+function _getGenSheetSnapshot() {
+  const raw = PropertiesService.getDocumentProperties().getProperty(_GEN_SNAPSHOT_KEY());
+  return raw ? JSON.parse(raw) : null;
+}
+
+function _saveGenSheetSnapshot(map) {
+  PropertiesService.getDocumentProperties().setProperty(_GEN_SNAPSHOT_KEY(), JSON.stringify(map));
+}
+
+function _buildGenSheetSnapshot() {
+  const ss = SpreadsheetApp.getActive();
+  const map = {};
+  ss.getSheets().forEach(sh => {
+    let tag = "";
+    try { tag = sh.getRange("H1").getValue(); } catch (e) {}
+    if (tag === "GENERATED_DEPT") {
+      map[String(sh.getSheetId())] = sh.getName();
+    }
+  });
+  return map;
+}
+
+/**
+ * NEW: Seed the rename snapshot. Safe to call anytime (e.g., from onOpen).
+ * This guarantees the {sheetId: name} baseline exists for EXISTING generated
+ * sheets, so the very first rename you make is detected and propagated even if
+ * you have not generated a new department since installing this code.
+ */
+function seedGenSheetSnapshot() {
+  _saveGenSheetSnapshot(_buildGenSheetSnapshot());
+}
+
+/**
+ * Detect renames of generated sheets, propagate to Settings col H, and refresh Summary.
+ * Returns true if a rename was handled (so onChange can skip a duplicate summary refresh).
+ */
+function detectGeneratedSheetRenames() {
+  const ss = SpreadsheetApp.getActive();
+  let snapshot = _getGenSheetSnapshot();
+
+  // First-run bootstrap: no snapshot yet — populate and exit silently
+  if (snapshot === null) {
+    _saveGenSheetSnapshot(_buildGenSheetSnapshot());
+    return false;
+  }
+
+  const settings = ss.getSheetByName("Settings");
+  let renamed = false;
+
+  ss.getSheets().forEach(sh => {
+    let tag = "";
+    try { tag = sh.getRange("H1").getValue(); } catch (e) {}
+    if (tag !== "GENERATED_DEPT") return;
+
+    const id = String(sh.getSheetId());
+    const currentName = sh.getName();
+    const oldName = snapshot[id];
+
+    if (oldName && oldName !== currentName) {
+      // Update Settings col H wherever the old name appears
+      if (settings) {
+        const lastRow = settings.getLastRow();
+        if (lastRow >= 5) {
+          const colH = settings.getRange(5, 8, lastRow - 4, 1).getValues();
+          for (let i = 0; i < colH.length; i++) {
+            if (String(colH[i][0]).trim() === oldName) {
+              settings.getRange(5 + i, 8).setValue(currentName);
+            }
+          }
+        }
+      }
+      renamed = true;
+    }
+
+    snapshot[id] = currentName;
+  });
+
+  // Prune snapshot entries for sheets that no longer exist
+  const currentIds = new Set(ss.getSheets().map(s => String(s.getSheetId())));
+  Object.keys(snapshot).forEach(id => {
+    if (!currentIds.has(id)) delete snapshot[id];
+  });
+
+  _saveGenSheetSnapshot(snapshot);
+
+  if (renamed) {
+    SpreadsheetApp.flush();
+    autoUpdateSummarySheet();
+  }
+
+  return renamed;
+}
+
+/**
+ * Installs an installable onChange trigger as a fallback in case the simple
+ * trigger does not fire in certain deployment contexts.
+ * Run once from Report Automation > Setup Auto-Refresh.
+ */
+function setupOnChangeTrigger() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const alreadySet = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === "onChange");
+  if (!alreadySet) {
+    ScriptApp.newTrigger("onChange").forSpreadsheet(ss).onChange().create();
+    // NEW: seed the baseline immediately so the first rename after setup is caught
+    seedGenSheetSnapshot();
+    SpreadsheetApp.getUi().alert("Done! The Summary will now auto-refresh whenever a sheet is renamed or deleted.");
+  } else {
+    // NEW: refresh the baseline in case sheets changed before this re-run
+    seedGenSheetSnapshot();
+    SpreadsheetApp.getUi().alert("Auto-refresh is already set up.");
+  }
+}
+
+/** * PART 4: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
  */
 function autoUpdateSummarySheet(newSheetName) {
   const ss = SpreadsheetApp.getActive();
@@ -727,6 +866,19 @@ function autoUpdateSummarySheet(newSheetName) {
   checkAndTile();
 
   const settings = ss.getSheetByName("Settings");
+
+  // --- AUTO-CLEAN SETTINGS: Remove rows in Col H whose sheet no longer exists ---
+  const _preCleanRow = settings.getLastRow();
+  if (_preCleanRow >= 5) {
+    const _colH = settings.getRange(5, 8, _preCleanRow - 4, 1).getValues();
+    for (let i = _colH.length - 1; i >= 0; i--) {
+      const _ref = String(_colH[i][0]).trim();
+      if (_ref !== "" && !ss.getSheetByName(_ref)) {
+        settings.deleteRow(5 + i);
+      }
+    }
+  }
+
   const lastRow = settings.getLastRow();
 
   // --- UPDATED: Fetch Gross Multiplier from D2 ---
