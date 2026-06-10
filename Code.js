@@ -26,6 +26,7 @@ function onOpen() {
     .addItem('Build Appendix', 'buildAppendixFromTemplate')
     .addItem('Refresh Sheet Names', 'refreshSheetNames')
     .addItem('Refresh Rooms from Master List', 'refreshAllDepartmentsFromMasterList')
+    .addItem('Wrap Remarks (All Sheets)', 'wrapAllGeneratedRemarks')
     .addItem('Show Total GSM', 'showSidebar')
     .addSeparator()
     .addItem('Setup Auto-Refresh', 'setupOnChangeTrigger')

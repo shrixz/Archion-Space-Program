@@ -23,8 +23,8 @@ function _applyConsistentRowStyle(sheet, row) {
   sheet.getRange(row, 1).setHorizontalAlignment("left");
   // Columns B-G (qty, length, "x", width, area, NSM) â€” numbers/separator, centered
   sheet.getRange(row, 2, 1, 6).setHorizontalAlignment("center");
-  // Column H (remarks) â€” text, left-aligned
-  sheet.getRange(row, 8).setHorizontalAlignment("left");
+  // Column H (remarks) â€” text, left-aligned, wrap so long remarks aren't clipped
+  sheet.getRange(row, 8).setHorizontalAlignment("left").setWrap(true);
 }
 
 /** * PART 1: THE MODIFIED GENERATOR
@@ -62,6 +62,10 @@ function generateDeptMimicLobby() {
   }
   const maxRoomRow      = tmplLabelRowNSM > 0 ? tmplLabelRowNSM - 1 : 28; // last data row
   const tmplCircFactorRow = tmplLabelRowNSM > 0 ? tmplLabelRowNSM + 1 : 30; // "Circ Factor" row
+
+  // Ensure Remarks (col H) wraps text on the template so future entries and
+  // every generated sheet (via copyTo) inherit wrap. Idempotent.
+  template.getRange(startRow, 8, maxRoomRow - startRow + 1, 1).setWrap(true);
 
   // --- CHECK FOR CIRCULATION FACTOR (dynamic row) ---
   const factorVal = template.getRange(tmplCircFactorRow, 7).getValue();
@@ -163,6 +167,10 @@ function generateDeptMimicLobby() {
   // --- REQ 5: .00 Area and NSM FORMATTING (covers all data rows dynamically) ---
   newSheet.getRange(startRow, 6, (lastDataRow - startRow + 1), 2).setNumberFormat("#,##0.00");
   newSheet.getRange(labelRowNSM, 7, 3, 1).setNumberFormat("#,##0.00");
+
+  // Enforce wrap on Remarks (col H) across the new sheet's data range so long
+  // remarks (including auto-populated values) aren't visually clipped.
+  newSheet.getRange(startRow, 8, (lastDataRow - startRow + 1), 1).setWrap(true);
 
   newSheet.getRange(rowTotalGSM, 1, 1, 7).setFontWeight("bold");
   newSheet.getRange(labelRowNSM, 1, 4, 7).setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
@@ -750,6 +758,12 @@ function onEdit(e) {
 
   // --- REQ 4: REAL-TIME SUMMARY UPDATE ON GENERATED SHEET EDIT ---
   if (isGenerated) {
+    // Ensure Remarks (col H) stays wrapped across the data range on every edit.
+    if (genLabelRowNSM > 0 && genLastDataRow >= genStartRow) {
+      try {
+        sheet.getRange(genStartRow, 8, genLastDataRow - genStartRow + 1, 1).setWrap(true);
+      } catch (e) {}
+    }
     SpreadsheetApp.flush(); // Ensure sheet calculations are finished
     autoUpdateSummarySheet(); // Re-build the summary to reflect new changes instantly
   }
@@ -879,6 +893,41 @@ function detectGeneratedSheetRenames() {
   _applyTabColorsFromSettings();
 
   return renamed;
+}
+
+/**
+ * One-shot fix: walk every GENERATED_DEPT sheet and enable wrap on column H
+ * (Remarks) across its data range so existing rows with overflowing text
+ * become wrapped. Safe to run any number of times (idempotent).
+ */
+function wrapAllGeneratedRemarks() {
+  const ss = SpreadsheetApp.getActive();
+  let fixedSheets = 0;
+  ss.getSheets().forEach(sh => {
+    let tag = "";
+    try { tag = sh.getRange("H1").getValue(); } catch (e) {}
+    if (tag !== "GENERATED_DEPT") return;
+
+    const colA = sh.getRange("A:A").getValues();
+    const startRow = 9;
+    let labelRowNSM = 0;
+    for (let i = startRow - 1; i < colA.length; i++) {
+      if (colA[i][0].toString().trim() === "Total NSM") {
+        labelRowNSM = i + 1;
+        break;
+      }
+    }
+    const lastDataRow = labelRowNSM > 0 ? labelRowNSM - 1 : 28;
+    if (lastDataRow >= startRow) {
+      try {
+        sh.getRange(startRow, 8, lastDataRow - startRow + 1, 1).setWrap(true);
+        fixedSheets++;
+      } catch (e) {}
+    }
+  });
+  try {
+    SpreadsheetApp.getUi().alert("Wrapped Remarks (col H) on " + fixedSheets + " generated sheet(s).");
+  } catch (e) {}
 }
 
 /**
