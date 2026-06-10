@@ -323,8 +323,10 @@ async function buildSummaryFromSettings() {
     if (appSheet) {
       const appLastRow = appSheet.getLastRow();
       
-      // LOGIC CHANGE: Use 'name' (the Sheet Name) instead of Row 4
-      const pageTitle = name; 
+      // LOGIC CHANGE: Use 'name' (the Sheet Name) instead of Row 4.
+      // String() guards against numeric sheet names (e.g. "1.1", "123") which
+      // getValues() returns as Number and crashes PDFLib's drawText.
+      const pageTitle = String(name);
       
       // EXPORT 1: Full Page 1 (Rows 1-3 visible)
       appSheet.showRows(1, 3);

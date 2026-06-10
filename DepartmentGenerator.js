@@ -230,10 +230,11 @@ function generateDeptMimicLobby() {
   // --- NEW REQUIREMENT: HIDE ROW 1 ---
   newSheet.hideRows(1);
 
-  // --- NEW REQUIREMENT: REMOVE EXTRA COLUMNS (I TO END) ---
+  // --- REMOVE EXTRA COLUMNS (keep up to col I so the pasteboard column from
+  //     the Department Template carries over into the generated sheet) ---
   const totalCols = newSheet.getMaxColumns();
-  if (totalCols > 8) {
-    newSheet.deleteColumns(9, totalCols - 8);
+  if (totalCols > 9) {
+    newSheet.deleteColumns(10, totalCols - 9);
   }
 
   // TAG THE SHEET AS GENERATED (Placed securely in H1 so it doesn't auto-expand columns to ZZ!)
