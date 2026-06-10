@@ -234,6 +234,9 @@ function generateDeptMimicLobby() {
   // --- NEW: Track this sheet's id->name so future renames can be detected and propagated ---
   _saveGenSheetSnapshot(_buildGenSheetSnapshot());
 
+  // Apply tab color based on the assigned category's font color in Settings col B.
+  _applyTabColorsFromSettings();
+
   ss.setActiveSheet(newSheet);
   SpreadsheetApp.getUi().alert("Finished! Sheet '" + deptName + "' is ready. Post-generation edits will be tracked, and the Summary has been automatically updated.");
 }
@@ -248,6 +251,25 @@ function onEdit(e) {
   const row = range.getRow();
   const col = range.getColumn();
   const ss = e.source;
+
+  // ==========================================
+  // BRANCH C: SETTINGS SHEET LOGIC
+  // Col H (sheet name) edits -> refresh tab colors + rerun Summary so that
+  // removing/replacing a sheet ref in col H is reflected immediately.
+  // Col B (legend) or col G (per-row category) edits -> refresh tab colors only.
+  // ==========================================
+  if (sheetName === "Settings" && row >= 5) {
+    if (col === 8) {
+      _applyTabColorsFromSettings();
+      SpreadsheetApp.flush();
+      autoUpdateSummarySheet();
+      return;
+    }
+    if (col === 2 || col === 7) {
+      _applyTabColorsFromSettings();
+      return;
+    }
+  }
 
   // ==========================================
   // BRANCH A: DEPARTMENT TEMPLATE LOGIC
@@ -853,7 +875,70 @@ function detectGeneratedSheetRenames() {
     autoUpdateSummarySheet();
   }
 
+  // Re-apply tab colors so renamed sheets stay colored by their Settings category.
+  _applyTabColorsFromSettings();
+
   return renamed;
+}
+
+/**
+ * Tab Color Sync - color each GENERATED_DEPT tab based on its assigned
+ * category. Col B in Settings is the legend (unique category names with
+ * font colors); col G is the per-row category assignment for each sheet
+ * listed in col H. For each generated sheet we look up its col G value,
+ * find that category in the col B legend, and use that cell's font color
+ * as the tab color. Sheets not listed in col H (or whose category isn't
+ * in the col B legend) get their tab color cleared. Black / default font
+ * color is treated as "no color".
+ */
+function _applyTabColorsFromSettings() {
+  const ss = SpreadsheetApp.getActive();
+  const settings = ss.getSheetByName("Settings");
+  if (!settings) return;
+
+  const lastRow = settings.getLastRow();
+
+  // Build category -> color map from col B legend.
+  const catToColor = {};
+  if (lastRow >= 5) {
+    const rowCount = lastRow - 4;
+    const colBRange = settings.getRange(5, 2, rowCount, 1);
+    const colBValues = colBRange.getValues();
+    const colBColors = colBRange.getFontColors();
+    for (let i = 0; i < rowCount; i++) {
+      const cat = String(colBValues[i][0]).trim();
+      if (!cat) continue;
+      if (Object.prototype.hasOwnProperty.call(catToColor, cat)) continue; // keep first
+      const c = colBColors[i][0];
+      catToColor[cat] = (!c || c === "#000000") ? null : c;
+    }
+  }
+
+  // Build sheet name -> color via col G category assignment.
+  const nameToColor = {};
+  if (lastRow >= 5) {
+    const rowCount = lastRow - 4;
+    const colGValues = settings.getRange(5, 7, rowCount, 1).getValues();
+    const colHValues = settings.getRange(5, 8, rowCount, 1).getValues();
+    for (let i = 0; i < rowCount; i++) {
+      const sheetName = String(colHValues[i][0]).trim();
+      if (!sheetName) continue;
+      const cat = String(colGValues[i][0]).trim();
+      nameToColor[sheetName] = (cat && Object.prototype.hasOwnProperty.call(catToColor, cat)) ? catToColor[cat] : null;
+    }
+  }
+
+  ss.getSheets().forEach(sh => {
+    let tag = "";
+    try { tag = sh.getRange("H1").getValue(); } catch (e) {}
+    if (tag !== "GENERATED_DEPT") return;
+    const name = sh.getName();
+    const target = Object.prototype.hasOwnProperty.call(nameToColor, name) ? nameToColor[name] : null;
+    try {
+      if (target) sh.setTabColor(target);
+      else sh.setTabColor(null);
+    } catch (e) {}
+  });
 }
 
 /**
