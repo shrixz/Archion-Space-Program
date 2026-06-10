@@ -391,7 +391,7 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
     const embeddedTemplate = await mergedPdf.embedPage(templatePage);
     newPage.drawPage(embeddedTemplate);
 
-    const sPage = (i === 0) ? pagesFull[0] : pagesNext[i];
+    const sPage = pagesNext[i];
     const embeddedSheet = await mergedPdf.embedPage(sPage);
     
     const scale = Math.min(templatePage.getWidth() / sPage.getWidth(), 1);
