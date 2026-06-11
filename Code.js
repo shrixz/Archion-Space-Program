@@ -88,8 +88,10 @@ async function buildSummaryFromSettings() {
   const ss = SpreadsheetApp.getActive();
   const template = ss.getSheetByName("Summary Template");
   const coverTemplate = ss.getSheetByName("Cover Template");
-  
+
   if (!template || !coverTemplate) throw new Error("Templates not found.");
+
+  _purgeCoverTemplateCopies(ss);
   
   const versionText = coverTemplate.getRange(10, 9).getDisplayValue(); 
   const dateText = coverTemplate.getRange(15, 9).getDisplayValue();
@@ -97,14 +99,54 @@ async function buildSummaryFromSettings() {
   const hospitalName = template.getRange("F30").getDisplayValue();
   
   const existingSummary = ss.getSheetByName("Summary");
-  if (existingSummary) ss.deleteSheet(existingSummary);
-  
-  const target = coverTemplate.copyTo(ss).setName("Summary");
-  
-  const PAGE_HEIGHT = 31;          
-  const DATA_START_REL = 11;    
-  const DATA_END_REL = 27;      
-  const ROWS_PER_PAGE = (DATA_END_REL - DATA_START_REL) + 1; 
+
+  // Snapshot col G notes keyed by (colA, colB) so they survive the rebuild.
+  // Col G is user-typed notes; excluded from the PDF export but must persist.
+  const noteSnapshot = {};
+  if (existingSummary) {
+    try {
+      const sLastRow = existingSummary.getLastRow();
+      const sMaxCols = existingSummary.getMaxColumns();
+      if (sLastRow > 0 && sMaxCols >= 7) {
+        const keyData = existingSummary.getRange(1, 1, sLastRow, 2).getValues();
+        const noteData = existingSummary.getRange(1, 7, sLastRow, 1).getRichTextValues();
+        for (let i = 0; i < keyData.length; i++) {
+          const rt = noteData[i][0];
+          const noteText = rt ? rt.getText() : "";
+          if (noteText !== "") {
+            const key = String(keyData[i][0]).trim() + "" + String(keyData[i][1]).trim();
+            if (key !== "") noteSnapshot[key] = rt;
+          }
+        }
+      }
+    } catch (snapErr) { /* notes snapshot failed; continue with empty snapshot */ }
+    ss.deleteSheet(existingSummary);
+  }
+
+  // Defensive: if setName fails (e.g. a concurrent rebuild already created
+  // "Summary"), delete the orphan copy immediately so it does not linger as
+  // "Copy of Cover Template N".
+  const _tmpCopy = coverTemplate.copyTo(ss);
+  let target;
+  try {
+    target = _tmpCopy.setName("Summary");
+  } catch (nameErr) {
+    try { ss.deleteSheet(_tmpCopy); } catch (e) {}
+    throw nameErr;
+  }
+
+  // The notes column lives in col G but is owned by the user — not the Cover
+  // Template — so the fresh copy may come back with fewer than 7 columns.
+  // Ensure col G exists before restore, otherwise the snapshot has nowhere
+  // to land and notes silently disappear on every rebuild.
+  if (target.getMaxColumns() < 7) {
+    target.insertColumnsAfter(target.getMaxColumns(), 7 - target.getMaxColumns());
+  }
+
+  const PAGE_HEIGHT = 31;
+  const DATA_START_REL = 11;
+  const DATA_END_REL = 27;
+  const ROWS_PER_PAGE = (DATA_END_REL - DATA_START_REL) + 1;
   
   const templateRowHeights = [];
   for (let i = 1; i <= PAGE_HEIGHT; i++) {
@@ -204,6 +246,7 @@ async function buildSummaryFromSettings() {
     const sheetName = String(row[6]).trim();   // <-- Updated: Trimmed
     const displayRoomName = row[7] ? String(row[7]).trim() : sheetName; // Col I
 
+   try {
     if (sectionFull !== lastSection) {
       if (lastSection !== "") {
         if (lastSectionNeedsSubtotal) {
@@ -263,13 +306,20 @@ async function buildSummaryFromSettings() {
       grandTotalC += sqm;
       grandTotalE += (sqm * grossMultiplier); // <-- UPDATED
       
-      target.getRange(targetRow, 2).setValue(displayRoomName); 
-      target.getRange(targetRow, 3).setValue(sqm); 
+      target.getRange(targetRow, 2).setValue(displayRoomName);
+      target.getRange(targetRow, 3).setValue(sqm);
       // OUTPUT CIRC FACTOR TO COLUMN D (Col 4)
-      target.getRange(targetRow, 4).setValue(gsm);      
+      target.getRange(targetRow, 4).setValue(gsm);
       target.getRange(targetRow, 5).setValue(sqm * grossMultiplier);  // <-- UPDATED
     }
     currentRowInPage++;
+   } catch (deptErr) {
+    throw new Error(
+      "Summary build failed on Settings col H entry '" + sheetName +
+      "' (section: '" + sectionFull + "'). Original: " +
+      (deptErr && deptErr.message ? deptErr.message : deptErr)
+    );
+   }
   });
 
   // Evaluate final section subtotal after loop ends
@@ -305,12 +355,29 @@ async function buildSummaryFromSettings() {
     target.getRange((p * PAGE_HEIGHT) + PAGE_HEIGHT, 3).setValue("Page " + p + " of " + currentPage).setHorizontalAlignment("center").setFontWeight("bold").setFontSize(9);
   }
 
+  // Restore col G notes onto matching rows of the rebuilt Summary.
+  if (Object.keys(noteSnapshot).length > 0) {
+    try {
+      const tLastRow = target.getLastRow();
+      const tMaxCols = target.getMaxColumns();
+      if (tLastRow > 0 && tMaxCols >= 7) {
+        const tKeyData = target.getRange(1, 1, tLastRow, 2).getValues();
+        for (let i = 0; i < tKeyData.length; i++) {
+          const key = String(tKeyData[i][0]).trim() + "" + String(tKeyData[i][1]).trim();
+          if (key !== "" && noteSnapshot.hasOwnProperty(key)) {
+            target.getRange(i + 1, 7).setRichTextValue(noteSnapshot[key]);
+          }
+        }
+      }
+    } catch (restErr) { /* notes restore failed; sheet rebuilt cleanly without notes */ }
+  }
+
   SpreadsheetApp.flush();
   const token = ScriptApp.getOAuthToken();
   const allBlobs = [];
 
   const exportLastRow = (currentPage * PAGE_HEIGHT) + PAGE_HEIGHT;
-  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.1&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=8`;
+  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.1&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=6`;
   const summaryBlob = fetchWithRetry(summaryUrl, token);
   allBlobs.push(summaryBlob.setName("Summary.pdf"));
 

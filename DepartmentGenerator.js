@@ -261,6 +261,10 @@ function onEdit(e) {
   const col = range.getColumn();
   const ss = e.source;
 
+  // Summary is rebuilt by script; user only edits col G notes here.
+  // Skip onEdit entirely so note typing doesn't flash the script indicator.
+  if (sheetName === "Summary") return;
+
   // ==========================================
   // BRANCH C: SETTINGS SHEET LOGIC
   // Col H (sheet name) edits -> refresh tab colors + rerun Summary so that
@@ -778,11 +782,14 @@ function onEdit(e) {
 function onChange(e) {
   if (!e || !e.changeType) return;
 
-  // NEW: Detect when a generated sheet was renamed (e.g., "Shane" -> "Shane First").
-  // If so, update Settings col H to match the new name and refresh the Summary.
-  const renameHandled = detectGeneratedSheetRenames();
+  // Only rename ("OTHER") or sheet deletion ("REMOVE_GRID") need handling.
+  // Skip the rest (INSERT_COLUMN / INSERT_ROW / FORMAT / EDIT / ...) so user
+  // actions like adding col G on Summary for notes don't fire a full snapshot
+  // scan across every sheet — that scan serializes against the next onEdit
+  // and is what makes typing feel "locked" right after the insert.
+  if (e.changeType !== "OTHER" && e.changeType !== "REMOVE_GRID") return;
 
-  // Existing behavior: refresh summary when a sheet is deleted
+  const renameHandled = detectGeneratedSheetRenames();
   if (e.changeType === "REMOVE_GRID" && !renameHandled) autoUpdateSummarySheet();
 }
 
@@ -1011,6 +1018,23 @@ function setupOnChangeTrigger() {
   }
 }
 
+/**
+ * Remove orphaned "Copy of Cover Template..." sheets left behind by a failed
+ * Summary rebuild. The Summary build does coverTemplate.copyTo(ss).setName("Summary");
+ * copyTo initially names the new sheet "Copy of Cover Template" (or "...N" on
+ * collision), and if the subsequent setName throws — usually because a concurrent
+ * onEdit-triggered rebuild already created "Summary" — the copy lingers as
+ * "Copy of Cover Template 2", "...3", etc. Call at the top of every rebuild.
+ */
+function _purgeCoverTemplateCopies(ss) {
+  ss.getSheets().forEach(sh => {
+    const n = sh.getName();
+    if (n === "Copy of Cover Template" || /^Copy of Cover Template \d+$/.test(n)) {
+      try { ss.deleteSheet(sh); } catch (e) {}
+    }
+  });
+}
+
 /** * PART 4: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
  */
 function autoUpdateSummarySheet(newSheetName) {
@@ -1020,15 +1044,57 @@ function autoUpdateSummarySheet(newSheetName) {
 
   if (!template || !coverTemplate) return;
 
+  _purgeCoverTemplateCopies(ss);
+
   const versionText = coverTemplate.getRange(10, 9).getDisplayValue();
   const dateText = coverTemplate.getRange(15, 9).getDisplayValue();
   const fullHeaderValue = versionText + "\n" + dateText;
   const hospitalName = template.getRange("F30").getDisplayValue();
 
   const existingSummary = ss.getSheetByName("Summary");
-  if (existingSummary) ss.deleteSheet(existingSummary);
 
-  const target = coverTemplate.copyTo(ss).setName("Summary");
+  // Snapshot col G notes keyed by (colA, colB) so they survive the rebuild.
+  // Col G is user-typed notes; not included in the PDF export but must persist.
+  const noteSnapshot = {};
+  if (existingSummary) {
+    try {
+      const sLastRow = existingSummary.getLastRow();
+      const sMaxCols = existingSummary.getMaxColumns();
+      if (sLastRow > 0 && sMaxCols >= 7) {
+        const keyData = existingSummary.getRange(1, 1, sLastRow, 2).getValues();
+        const noteData = existingSummary.getRange(1, 7, sLastRow, 1).getRichTextValues();
+        for (let i = 0; i < keyData.length; i++) {
+          const rt = noteData[i][0];
+          const noteText = rt ? rt.getText() : "";
+          if (noteText !== "") {
+            const key = String(keyData[i][0]).trim() + "" + String(keyData[i][1]).trim();
+            if (key !== "") noteSnapshot[key] = rt;
+          }
+        }
+      }
+    } catch (snapErr) { /* notes snapshot failed; continue with empty snapshot */ }
+    ss.deleteSheet(existingSummary);
+  }
+
+  // Defensive: if setName fails (e.g. a concurrent rebuild already created
+  // "Summary"), delete the orphan copy immediately so it does not linger as
+  // "Copy of Cover Template N".
+  const _tmpCopy = coverTemplate.copyTo(ss);
+  let target;
+  try {
+    target = _tmpCopy.setName("Summary");
+  } catch (nameErr) {
+    try { ss.deleteSheet(_tmpCopy); } catch (e) {}
+    throw nameErr;
+  }
+
+  // The notes column lives in col G but is owned by the user — not the Cover
+  // Template — so the fresh copy may come back with fewer than 7 columns.
+  // Ensure col G exists before restore, otherwise the snapshot has nowhere
+  // to land and notes silently disappear on every rebuild.
+  if (target.getMaxColumns() < 7) {
+    target.insertColumnsAfter(target.getMaxColumns(), 7 - target.getMaxColumns());
+  }
 
   const PAGE_HEIGHT = 31;
   const DATA_START_REL = 11;
@@ -1126,6 +1192,7 @@ function autoUpdateSummarySheet(newSheetName) {
     const sheetName = String(row[6]).trim();
     const displayRoomName = row[7] ? String(row[7]).trim() : sheetName;
 
+   try {
     if (sectionFull !== lastSection) {
       if (lastSection !== "") {
         if (lastSectionNeedsSubtotal) {
@@ -1188,6 +1255,13 @@ function autoUpdateSummarySheet(newSheetName) {
       target.getRange(targetRow, 5).setValue(sqm * grossMultiplier); // <-- UPDATED
     }
     currentRowInPage++;
+   } catch (deptErr) {
+    throw new Error(
+      "Summary build failed on Settings col H entry '" + sheetName +
+      "' (section: '" + sectionFull + "'). Original: " +
+      (deptErr && deptErr.message ? deptErr.message : deptErr)
+    );
+   }
   });
 
   if (lastSection !== "" && lastSectionNeedsSubtotal) {
@@ -1217,6 +1291,23 @@ function autoUpdateSummarySheet(newSheetName) {
 
   for (let p = 1; p <= currentPage; p++) {
     target.getRange((p * PAGE_HEIGHT) + PAGE_HEIGHT, 3).setValue("Page " + p + " of " + currentPage).setHorizontalAlignment("center").setFontWeight("bold").setFontSize(9);
+  }
+
+  // Restore col G notes onto matching rows of the rebuilt Summary.
+  if (Object.keys(noteSnapshot).length > 0) {
+    try {
+      const tLastRow = target.getLastRow();
+      const tMaxCols = target.getMaxColumns();
+      if (tLastRow > 0 && tMaxCols >= 7) {
+        const tKeyData = target.getRange(1, 1, tLastRow, 2).getValues();
+        for (let i = 0; i < tKeyData.length; i++) {
+          const key = String(tKeyData[i][0]).trim() + "" + String(tKeyData[i][1]).trim();
+          if (key !== "" && noteSnapshot.hasOwnProperty(key)) {
+            target.getRange(i + 1, 7).setRichTextValue(noteSnapshot[key]);
+          }
+        }
+      }
+    } catch (restErr) { /* notes restore failed; sheet rebuilt cleanly without notes */ }
   }
 
   SpreadsheetApp.flush();
