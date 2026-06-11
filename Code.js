@@ -180,14 +180,17 @@ async function buildSummaryFromSettings() {
   
   const settings = ss.getSheetByName("Settings");
 
-  // --- AUTO-CLEAN SETTINGS: Remove rows in Col H whose sheet no longer exists ---
+  // --- AUTO-CLEAN SETTINGS: Clear cols G/H for rows whose sheet no longer exists ---
+  // Only the per-row category (G) and sheet name (H) cells are cleared — the
+  // full-row delete that used to live here also took out col B (category
+  // legend) and col C (subtotal flag), which the user wants to keep intact.
   const _preCleanRow = settings.getLastRow();
   if (_preCleanRow >= 5) {
     const _colH = settings.getRange(5, 8, _preCleanRow - 4, 1).getValues();
     for (let i = _colH.length - 1; i >= 0; i--) {
       const _ref = String(_colH[i][0]).trim();
       if (_ref !== "" && !ss.getSheetByName(_ref)) {
-        settings.deleteRow(5 + i);
+        settings.getRange(5 + i, 7, 1, 2).clearContent();
       }
     }
   }

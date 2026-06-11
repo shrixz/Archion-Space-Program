@@ -289,6 +289,12 @@ function onEdit(e) {
   // ==========================================
   if (sheetName === "Department Template") {
 
+    // Col I is user-typed notes — no script logic reads it and it isn't in
+    // the PDF, so editing it should not run the row-style normalizer or any
+    // other Template handlers (those would otherwise flash the script
+    // indicator while you're typing).
+    if (col === 9) return;
+
     // NEW REQ: Cell A5 Tracker for Department Title
     if (row === 5 && col === 1) {
       range.setFontWeight("bold"); // Always keep bold
@@ -513,6 +519,13 @@ function onEdit(e) {
   if (!isGenerated) return;
   const excludedSheets = ["Department Template", "Standard Room Size", "Non-Standard Report", "Instructions"];
   if (excludedSheets.indexOf(sheetName) > -1) return;
+
+  // Col I is user-typed notes — no script logic reads it and it isn't in
+  // the PDF. Bail out before the row-style normalizer and (critically)
+  // before the Summary rebuild at the bottom of this branch, since
+  // rebuilding the Summary on every keystroke in a notes cell is what
+  // locks typing.
+  if (col === 9) return;
 
   // Editing A5 (Department Title) renames the tab to match, then propagates to
   // Settings col H and refreshes the Summary via detectGeneratedSheetRenames.
@@ -1133,14 +1146,17 @@ function autoUpdateSummarySheet(newSheetName) {
 
   const settings = ss.getSheetByName("Settings");
 
-  // --- AUTO-CLEAN SETTINGS: Remove rows in Col H whose sheet no longer exists ---
+  // --- AUTO-CLEAN SETTINGS: Clear cols G/H for rows whose sheet no longer exists ---
+  // Only the per-row category (G) and sheet name (H) cells are cleared — the
+  // full-row delete that used to live here also took out col B (category
+  // legend) and col C (subtotal flag), which the user wants to keep intact.
   const _preCleanRow = settings.getLastRow();
   if (_preCleanRow >= 5) {
     const _colH = settings.getRange(5, 8, _preCleanRow - 4, 1).getValues();
     for (let i = _colH.length - 1; i >= 0; i--) {
       const _ref = String(_colH[i][0]).trim();
       if (_ref !== "" && !ss.getSheetByName(_ref)) {
-        settings.deleteRow(5 + i);
+        settings.getRange(5 + i, 7, 1, 2).clearContent();
       }
     }
   }
