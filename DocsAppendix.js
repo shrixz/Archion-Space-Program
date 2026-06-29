@@ -7,8 +7,8 @@ function buildAppendixFromTemplate() {
   const settings = ss.getSheetByName("Settings");
   
   const lastRowSettings = settings.getLastRow();
-  if (lastRowSettings < 3) return;
-  const targetSheetNames = settings.getRange(3, 8, lastRowSettings - 2, 1).getValues().flat().filter(String);
+  if (lastRowSettings < 5) return;
+  const targetSheetNames = settings.getRange(5, 8, lastRowSettings - 4, 1).getValues().flat().filter(String);
   
   const uniqueRoomNames = new Set();
   targetSheetNames.forEach(sheetName => {

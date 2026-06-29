@@ -1224,6 +1224,21 @@ function autoUpdateSummarySheet(newSheetName) {
   // Read Columns B to I
   let settingsData = (lastRow < 5) ? [] : settings.getRange(5, 2, lastRow - 4, 8).getValues().filter(row => String(row[6]).trim() !== "");
 
+  // --- SUBTOTAL TOGGLE MAP (cols B + C) ---
+  // Same lookup as buildSummaryFromSettings (Code.js). Category name in
+  // Settings col B + checked col C → that category gets a Sub Total row.
+  // OR'd with the legacy per-row col C flag so either layout works.
+  const sectionSubtotalMap = {};
+  if (lastRow >= 1) {
+    const _bc = settings.getRange(1, 2, lastRow, 2).getValues();
+    for (const _r of _bc) {
+      const _name = String(_r[0] || "").trim();
+      if (!_name) continue;
+      const _flag = (_r[1] === true || String(_r[1]).toLowerCase() === 'true');
+      if (_flag) sectionSubtotalMap[_name] = true;
+    }
+  }
+
   // Check if newly generated sheet is inside the Settings list
   if (newSheetName) {
     const isSheetInSettings = settingsData.some(row => String(row[6]).trim() === String(newSheetName).trim());
@@ -1257,10 +1272,14 @@ function autoUpdateSummarySheet(newSheetName) {
   let lastSectionNeedsSubtotal = false;
 
   settingsData.forEach((row) => {
-    const needsSubtotal = (row[1] === true || String(row[1]).toLowerCase() === 'true');
     const sectionFull = String(row[5]).trim();
     const sheetName = String(row[6]).trim();
     const displayRoomName = row[7] ? String(row[7]).trim() : sheetName;
+    // Subtotal flag: cols A + B lookup OR legacy per-row col C flag. Either
+    // configuration enables the Sub Total row in the Summary.
+    const needsSubtotal =
+      (sectionSubtotalMap[sectionFull] === true) ||
+      (row[1] === true || String(row[1]).toLowerCase() === 'true');
 
    try {
     if (sectionFull !== lastSection) {

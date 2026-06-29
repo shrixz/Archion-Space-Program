@@ -122,6 +122,8 @@ function onOpen() {
     .addItem('Grant Permissions', 'requestPermissions')
     .addSeparator()
     .addItem('Reset File (Clean Start)', 'resetEverything')
+    .addSeparator()
+    .addItem('User Manual', 'showUserManual')
     .addToUi();
 }
 
@@ -330,10 +332,28 @@ async function buildSummaryFromSettings() {
   const grossMultiplier = Number(settings.getRange("D2").getValue()) || 1.25; 
   // --------------------------------------------------------
 
-  // Update: Read 8 columns starting from B (Col 2) up to I (Col 9). 
+  // Update: Read 8 columns starting from B (Col 2) up to I (Col 9).
   // index 0 = B (Category), index 1 = C (Checkbox), index 5 = G (Section Full), index 6 = H (Sheet), index 7 = I (Display Name)
-  let settingsData = (lastRow < 5) ? [] : settings.getRange(5, 2, lastRow - 4, 8).getValues().filter(row => row[6]); 
+  let settingsData = (lastRow < 5) ? [] : settings.getRange(5, 2, lastRow - 4, 8).getValues().filter(row => row[6]);
   const appendixList = (lastRow < 5) ? [] : settings.getRange(5, 8, lastRow - 4, 1).getValues().flat().filter(name => name !== "" && ss.getSheetByName(name));
+
+  // --- SUBTOTAL TOGGLE MAP (cols B + C) ---
+  // Build a name → flag map by scanning Settings col B for category labels
+  // and col C for the matching checkbox. Any category whose checkbox in col C
+  // is TRUE gets a "Sub Total" row in the Summary. Lookup is by exact string
+  // match against the per-row category in col G. OR'd with the legacy per-row
+  // col C flag (read as row[1] from the cols B-I block below) so either
+  // configuration works.
+  const sectionSubtotalMap = {};
+  if (lastRow >= 1) {
+    const _bc = settings.getRange(1, 2, lastRow, 2).getValues();
+    for (const _r of _bc) {
+      const _name = String(_r[0] || "").trim();
+      if (!_name) continue;
+      const _flag = (_r[1] === true || String(_r[1]).toLowerCase() === 'true');
+      if (_flag) sectionSubtotalMap[_name] = true;
+    }
+  }
 
   // --- NEW: Filter out deleted/ghost sheets so they don't produce empty gap rows! ---
   settingsData = settingsData.filter(row => ss.getSheetByName(String(row[6]).trim()));
@@ -360,11 +380,15 @@ async function buildSummaryFromSettings() {
   let lastSectionNeedsSubtotal = false;
 
   settingsData.forEach((row) => {
-    // Determine checkbox state from Column C (index 1)
-    const needsSubtotal = (row[1] === true || String(row[1]).toLowerCase() === 'true');
     const sectionFull = String(row[5]).trim(); // <-- Updated: Trimmed to prevent accidental duplicate sections
     const sheetName = String(row[6]).trim();   // <-- Updated: Trimmed
     const displayRoomName = row[7] ? String(row[7]).trim() : sheetName; // Col I
+    // Subtotal flag: TRUE if the category name shows up in Settings col A
+    // with col B checked, OR if the legacy per-row col C checkbox is on.
+    // Either layout works; both can coexist.
+    const needsSubtotal =
+      (sectionSubtotalMap[sectionFull] === true) ||
+      (row[1] === true || String(row[1]).toLowerCase() === 'true');
 
    try {
     if (sectionFull !== lastSection) {
