@@ -5,6 +5,95 @@ var setTimeout = function(cb, ms) { Utilities.sleep(ms); cb(); };
 var clearTimeout = function(id) {};
 
 /**
+ * RESET FILE — Clean Start
+ *
+ * Wipes derived/output state so the file is reusable for a new project while
+ * preserving the template sheets and configuration the system depends on.
+ *
+ * DELETES:
+ *   - Every generated department sheet (H1 tag === "GENERATED_DEPT")
+ *   - "Summary", "Phasing Summary", "Appendix"
+ *   - Any orphaned "Copy of Cover Template..." sheets left by a failed rebuild
+ *
+ * CLEARS:
+ *   - Non-Standard Report rows 2+ (header row preserved)
+ *   - Settings cols G + H from row 5 down (per-row category and sheet refs)
+ *   - The GEN_SHEET_NAME_SNAPSHOT_V1 document property so rename detection
+ *     starts fresh
+ *
+ * KEEPS:
+ *   - Templates: Cover Template, Summary Template, Department Template,
+ *     Standard Room Size, Header_Footer, Non-Standard Report (cleared),
+ *     Settings (legend + headers kept; only rows 5+ cols G/H cleared)
+ *
+ * Finishes by calling refreshSheetNames() so Settings col A reflects the
+ * surviving sheets immediately.
+ */
+function resetEverything() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActive();
+
+  const confirm = ui.alert(
+    "Reset File — Clean Start",
+    "This will permanently delete:\n" +
+    "  • All generated department sheets\n" +
+    "  • Summary, Phasing Summary, Appendix sheets\n" +
+    "  • Non-Standard Report data (header kept)\n" +
+    "  • Settings col G and col H (rows 5+)\n\n" +
+    "Templates (Cover, Summary, Department, Standard Room Size, etc.) are kept.\n\n" +
+    "Continue?",
+    ui.ButtonSet.YES_NO
+  );
+  if (confirm !== ui.Button.YES) return;
+
+  // 1. Delete generated / derived sheets.
+  const derivedNames = new Set(["Summary", "Phasing Summary", "Appendix"]);
+
+  ss.getSheets().forEach(sh => {
+    const name = sh.getName();
+
+    let isGen = false;
+    try { if (sh.getRange("H1").getValue() === "GENERATED_DEPT") isGen = true; } catch (e) {}
+
+    const isOrphanCopy =
+      name === "Copy of Cover Template" || /^Copy of Cover Template \d+$/.test(name);
+
+    if (isGen || derivedNames.has(name) || isOrphanCopy) {
+      try { ss.deleteSheet(sh); } catch (e) {}
+    }
+  });
+
+  // 2. Clear Non-Standard Report data (preserve header row 1).
+  const report = ss.getSheetByName("Non-Standard Report");
+  if (report) {
+    const lr = report.getLastRow();
+    if (lr >= 2) {
+      report.getRange(2, 1, lr - 1, report.getMaxColumns()).clearContent();
+    }
+  }
+
+  // 3. Clear Settings per-row dept assignments (cols G + H, rows 5+).
+  //    Legend in col B and config in rows 1-4 are preserved.
+  const settings = ss.getSheetByName("Settings");
+  if (settings) {
+    const lr = settings.getLastRow();
+    if (lr >= 5) {
+      settings.getRange(5, 7, lr - 4, 2).clearContent();
+    }
+  }
+
+  // 4. Clear stored rename snapshot so the next snapshot rebuilds clean.
+  try {
+    PropertiesService.getDocumentProperties().deleteProperty("GEN_SHEET_NAME_SNAPSHOT_V1");
+  } catch (e) {}
+
+  // 5. Refresh Settings col A with current sheet names.
+  try { refreshSheetNames(); } catch (e) {}
+
+  ui.alert("Reset complete. The file is now clean and ready to use.");
+}
+
+/**
  * REFRESH SHEET NAMES
  */
 function refreshSheetNames() {
@@ -31,6 +120,8 @@ function onOpen() {
     .addSeparator()
     .addItem('Setup Auto-Refresh', 'setupOnChangeTrigger')
     .addItem('Grant Permissions', 'requestPermissions')
+    .addSeparator()
+    .addItem('Reset File (Clean Start)', 'resetEverything')
     .addToUi();
 }
 
@@ -92,16 +183,27 @@ async function buildSummaryFromSettings() {
   if (!template || !coverTemplate) throw new Error("Templates not found.");
 
   _purgeCoverTemplateCopies(ss);
-  
-  const versionText = coverTemplate.getRange(10, 9).getDisplayValue(); 
+
+  // Defensive: ensure both templates are exactly REQUIRED_PAGE_HEIGHT rows.
+  // Pad shorter templates so F33 reads don't fall off the end; trim trailing
+  // blank, unmerged rows on longer templates (typically leftover padding from
+  // a previous auto-pad cycle when PAGE_HEIGHT was higher). If real content
+  // still sits beyond REQUIRED_PAGE_HEIGHT, throw a clear error — letting the
+  // tile math run into it produces "you can't perform a paste that partially
+  // intersects a merge" further down.
+  const REQUIRED_PAGE_HEIGHT = 34;
+  _padOrTrimTemplateRows(template, REQUIRED_PAGE_HEIGHT, "Summary Template");
+  _padOrTrimTemplateRows(coverTemplate, REQUIRED_PAGE_HEIGHT, "Cover Template");
+
+  const versionText = coverTemplate.getRange(10, 9).getDisplayValue();
   const dateText = coverTemplate.getRange(15, 9).getDisplayValue();
   const fullHeaderValue = versionText + "\n" + dateText;
-  const hospitalName = template.getRange("F30").getDisplayValue();
+  const hospitalName = template.getRange("F33").getDisplayValue();
   
   const existingSummary = ss.getSheetByName("Summary");
 
   // Snapshot col G notes keyed by (colA, colB) so they survive the rebuild.
-  // Col G is user-typed notes; excluded from the PDF export but must persist.
+  // Col G is user-typed notes; included in the PDF export and must persist.
   const noteSnapshot = {};
   if (existingSummary) {
     try {
@@ -143,18 +245,18 @@ async function buildSummaryFromSettings() {
     target.insertColumnsAfter(target.getMaxColumns(), 7 - target.getMaxColumns());
   }
 
-  const PAGE_HEIGHT = 31;
+  const PAGE_HEIGHT = 34;
   const DATA_START_REL = 11;
-  const DATA_END_REL = 27;
+  const DATA_END_REL = 30;
   const ROWS_PER_PAGE = (DATA_END_REL - DATA_START_REL) + 1;
-  
+
   const templateRowHeights = [];
   for (let i = 1; i <= PAGE_HEIGHT; i++) {
     templateRowHeights.push(template.getRowHeight(i));
   }
 
-  let currentPage = 1; 
-  let currentRowInPage = 0; 
+  let currentPage = 1;
+  let currentRowInPage = 0;
 
   function checkAndTile() {
     if (currentRowInPage >= ROWS_PER_PAGE || (currentPage === 1 && currentRowInPage === 0)) {
@@ -164,6 +266,14 @@ async function buildSummaryFromSettings() {
       }
       const start = (currentPage * PAGE_HEIGHT) + 1;
       target.insertRowsAfter(target.getMaxRows(), PAGE_HEIGHT);
+
+      // Break any merges in the destination block BEFORE the copy. Without
+      // this, a merge inherited from the Cover Template (which was the
+      // initial coverTemplate.copyTo source for `target`) that straddles the
+      // copy boundary will throw "You can't perform a paste that partially
+      // intersects a merge" on the copyTo line below.
+      target.getRange(start, 1, PAGE_HEIGHT, 9).breakApart();
+
       template.getRange(1, 1, PAGE_HEIGHT, 9).copyTo(target.getRange(start, 1));
       for (let h = 0; h < templateRowHeights.length; h++) {
         target.setRowHeight(start + h, templateRowHeights[h]);
@@ -171,13 +281,19 @@ async function buildSummaryFromSettings() {
       const headerCell = target.getRange(start, 6);
       headerCell.setValue(fullHeaderValue);
       headerCell.setWrap(true).setHorizontalAlignment("right").setVerticalAlignment("top");
-      target.getRange(start + 29, 6).setValue(hospitalName);
-      target.getRange(start + DATA_START_REL - 1, 1, ROWS_PER_PAGE, 5).clearContent();
+      target.getRange(start + 32, 6).setValue(hospitalName);
+
+      // breakApart again before clearContent so a Summary-Template merge that
+      // partially overlaps the 5-column data window doesn't trip the same
+      // partial-intersect rule.
+      const dataArea = target.getRange(start + DATA_START_REL - 1, 1, ROWS_PER_PAGE, 5);
+      dataArea.breakApart();
+      dataArea.clearContent();
     }
   }
 
   checkAndTile();
-  
+
   const settings = ss.getSheetByName("Settings");
 
   // --- AUTO-CLEAN SETTINGS: Clear cols G/H for rows whose sheet no longer exists ---
@@ -208,7 +324,8 @@ async function buildSummaryFromSettings() {
     }
   }
   const headerC3 = settings.getRange("C3").getDisplayValue();
-  
+  const headerC1 = settings.getRange("C1").getDisplayValue();
+
   // --- UPDATED: Fetch Gross Multiplier from D2 ---
   const grossMultiplier = Number(settings.getRange("D2").getValue()) || 1.25; 
   // --------------------------------------------------------
@@ -349,14 +466,15 @@ async function buildSummaryFromSettings() {
   target.getRange(totalRow, 3).setValue(grandTotalC);
   target.getRange(totalRow, 5).setValue(grandTotalE);
 
-  const footerStartRow = (currentPage * PAGE_HEIGHT) + 30;
+  const footerStartRow = (currentPage * PAGE_HEIGHT) + 33;
   if (footerStartRow > totalRow + 1) {
     target.getRange(totalRow + 1, 1, footerStartRow - (totalRow + 1), 6).setBorder(false, false, false, false, false, false).clearContent();
   }
 
-  for (let p = 1; p <= currentPage; p++) {
-    target.getRange((p * PAGE_HEIGHT) + PAGE_HEIGHT, 3).setValue("Page " + p + " of " + currentPage).setHorizontalAlignment("center").setFontWeight("bold").setFontSize(9);
-  }
+  // NOTE: cell-drawn "Page X of Y" footer is intentionally NOT written here —
+  // the doc-template overlay (overlaySummary) draws the page label on top of
+  // the template footer instead, matching the Appendix flow. Writing it to a
+  // cell as well produced duplicate "Page 1 of 1" stamps on each PDF page.
 
   // Restore col G notes onto matching rows of the rebuilt Summary.
   if (Object.keys(noteSnapshot).length > 0) {
@@ -380,28 +498,32 @@ async function buildSummaryFromSettings() {
   const allBlobs = [];
 
   const exportLastRow = (currentPage * PAGE_HEIGHT) + PAGE_HEIGHT;
-  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.1&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=6`;
+  const summaryUrl = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${target.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&top_margin=0.25&bottom_margin=0.1&left_margin=0.5&right_margin=0.5&r1=0&r2=${exportLastRow}&c1=0&c2=7`;
   const summaryBlob = fetchWithRetry(summaryUrl, token);
-  allBlobs.push(summaryBlob.setName("Summary.pdf"));
 
   const docTemplateId = "1OmwT0K6ODvevqy1qJUObwpa5hY0b9M3J4LFPeN7jr9k";
   const docBlob = DriveApp.getFileById(docTemplateId).getAs('application/pdf');
+
+  // Apply doc-template overlay to the Summary PDF starting on page 2
+  // (page 1 is the cover and is passed through untouched).
+  const overlaidSummaryBlob = await overlaySummary(docBlob, summaryBlob, "Summary", headerDate, headerC3, headerC1);
+  allBlobs.push(overlaidSummaryBlob.setName("Summary.pdf"));
 
   // APPENDIX LOOP
   for (const name of appendixList) {
     const appSheet = ss.getSheetByName(name);
     if (appSheet) {
       const appLastRow = appSheet.getLastRow();
-      
+
       // LOGIC CHANGE: Use 'name' (the Sheet Name) instead of Row 4.
       // String() guards against numeric sheet names (e.g. "1.1", "123") which
       // getValues() returns as Number and crashes PDFLib's drawText.
       const pageTitle = String(name);
-      
+
       // EXPORT 1: Full Page 1 (Rows 1-3 visible)
       appSheet.showRows(1, 3);
       appSheet.setFrozenRows(0);
-      const urlFull = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${appSheet.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&title=false&top_margin=0.1&bottom_margin=1.2&left_margin=0.5&right_margin=0.5&r1=0&r2=${appLastRow}&c1=0&c2=8`;
+      const urlFull = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${appSheet.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&title=false&top_margin=0.1&bottom_margin=1.2&left_margin=0.5&right_margin=0.5&r1=0&r2=${appLastRow}&c1=0&c2=9`;
       const blobFull = fetchWithRetry(urlFull, token);
 
       // EXPORT 2: Next Pages (Rows 1-3 hidden, Rows 4-5 frozen + spacer)
@@ -409,16 +531,16 @@ async function buildSummaryFromSettings() {
       appSheet.insertRowAfter(5);
       appSheet.setRowHeight(6, 4);
       appSheet.setFrozenRows(6);
-      const urlNext = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${appSheet.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&title=false&top_margin=0.1&bottom_margin=1.2&left_margin=0.5&right_margin=0.5&r1=0&r2=${appLastRow+1}&c1=0&c2=8`;
+      const urlNext = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${appSheet.getSheetId()}&size=A4&portrait=false&fitw=true&gridlines=false&printtitle=false&sheetnames=false&title=false&top_margin=0.1&bottom_margin=1.2&left_margin=0.5&right_margin=0.5&r1=0&r2=${appLastRow+1}&c1=0&c2=9`;
       const blobNext = fetchWithRetry(urlNext, token);
 
       // CLEANUP
       appSheet.setFrozenRows(0);
       appSheet.deleteRow(6);
       appSheet.showRows(1, 3);
-      
+
       // --- NEW: Passing header variables to overlay function ---
-      const overlaidBlob = await overlayAppendix(docBlob, blobFull, blobNext, pageTitle, headerDate, headerC3);
+      const overlaidBlob = await overlayAppendix(docBlob, blobFull, blobNext, pageTitle, headerDate, headerC3, headerC1);
       // ---------------------------------------------------------
       allBlobs.push(overlaidBlob.setName(name + ".pdf"));
     }
@@ -436,24 +558,25 @@ async function buildSummaryFromSettings() {
 /**
  * SPECIALIZED APPENDIX OVERLAY
  * --- NEW: Added headerDate and headerC3 to function parameters ---
+ * --- NEW: Added headerC1 — stamped directly above the sheet-name footer ---
  */
-async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, headerDate, headerC3) {
+async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, headerDate, headerC3, headerC1) {
   const libUrl = "https://unpkg.com/pdf-lib/dist/pdf-lib.min.js";
   const response = UrlFetchApp.fetch(libUrl);
-  eval(response.getContentText()); 
+  eval(response.getContentText());
 
   const mainDoc = await PDFLib.PDFDocument.load(new Uint8Array(templateBlob.getBytes()));
   const docFull = await PDFLib.PDFDocument.load(new Uint8Array(blobFull.getBytes()));
   const docNext = await PDFLib.PDFDocument.load(new Uint8Array(blobNext.getBytes()));
   const mergedPdf = await PDFLib.PDFDocument.create();
-  
+
   const helveticaBold = await mergedPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
   const helvetica = await mergedPdf.embedFont(PDFLib.StandardFonts.Helvetica); // <-- NEW: Regular font for the headers
-  
+
   const [templatePage] = await mergedPdf.copyPages(mainDoc, [0]);
-  const pagesFull = await mergedPdf.copyPages(docFull, [0]); 
-  const pagesNext = await mergedPdf.copyPages(docNext, docNext.getPageIndices()); 
-  
+  const pagesFull = await mergedPdf.copyPages(docFull, [0]);
+  const pagesNext = await mergedPdf.copyPages(docNext, docNext.getPageIndices());
+
   const totalPages = pagesNext.length;
 
   for (let i = 0; i < totalPages; i++) {
@@ -463,7 +586,7 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
 
     const sPage = pagesNext[i];
     const embeddedSheet = await mergedPdf.embedPage(sPage);
-    
+
     const scale = Math.min(templatePage.getWidth() / sPage.getWidth(), 1);
     const xPos = (templatePage.getWidth() - (sPage.getWidth() * scale)) / 2;
     const yPos = templatePage.getHeight() - (sPage.getHeight() * scale) - 55;
@@ -489,7 +612,7 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
       const fontSize = 8.5;
       const textWidth = helveticaBold.widthOfTextAtSize(pageTitle, fontSize);
       newPage.drawText(pageTitle, {
-        x: templatePage.getWidth() - textWidth - 50, 
+        x: templatePage.getWidth() - textWidth - 50,
         y: 28,
         size: fontSize,
         font: helveticaBold,
@@ -497,14 +620,28 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
       });
     }
 
+    // NEW: Stamping Settings!C1 directly above the sheet-name in the footer.
+    // Same x-anchor (right margin) so it sits visually above pageTitle.
+    if (headerC1) {
+      const c1FontSize = 8.5;
+      const c1Width = helveticaBold.widthOfTextAtSize(headerC1, c1FontSize);
+      newPage.drawText(headerC1, {
+        x: templatePage.getWidth() - c1Width - 50,
+        y: 40, // 12 points above the sheet-name line (y=28)
+        size: c1FontSize,
+        font: helveticaBold,
+        color: PDFLib.rgb(0, 0, 0),
+      });
+    }
+
     // --- NEW: Stamping the Header Data on Top Right (Using normal Helvetica font) ---
     const headerFontSize = 10;
-    
+
     // Line 1: Date from C4 (MM/DD/YYYY format)
     if (headerDate) {
       const dateWidth = helvetica.widthOfTextAtSize(headerDate, headerFontSize);
       newPage.drawText(headerDate, {
-        x: templatePage.getWidth() - dateWidth - 50, 
+        x: templatePage.getWidth() - dateWidth - 50,
         y: templatePage.getHeight() - 30, // 30 points down from top
         size: headerFontSize,
         font: helvetica, // <-- Modified to use regular font
@@ -516,7 +653,7 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
     if (headerC3) {
       const c3Width = helvetica.widthOfTextAtSize(headerC3, headerFontSize);
       newPage.drawText(headerC3, {
-        x: templatePage.getWidth() - c3Width - 50, 
+        x: templatePage.getWidth() - c3Width - 50,
         y: templatePage.getHeight() - 42, // 12 points below the date
         size: headerFontSize,
         font: helvetica, // <-- Modified to use regular font
@@ -524,6 +661,119 @@ async function overlayAppendix(templateBlob, blobFull, blobNext, pageTitle, head
       });
     }
     // ---------------------------------------------------
+  }
+  return Utilities.newBlob(await mergedPdf.save(), "application/pdf");
+}
+
+/**
+ * SUMMARY OVERLAY
+ * Stamps the Google Doc footer template onto the Summary PDF starting from
+ * page 2. Page 1 (the cover) is passed through untouched. Same stamping
+ * style as overlayAppendix: pageTitle + Settings!C1 in the footer (lower
+ * right, C1 directly above the tab name), plus C3 / date in the upper right.
+ */
+async function overlaySummary(templateBlob, summaryBlob, pageTitle, headerDate, headerC3, headerC1) {
+  const libUrl = "https://unpkg.com/pdf-lib/dist/pdf-lib.min.js";
+  const response = UrlFetchApp.fetch(libUrl);
+  eval(response.getContentText());
+
+  const mainDoc = await PDFLib.PDFDocument.load(new Uint8Array(templateBlob.getBytes()));
+  const docSummary = await PDFLib.PDFDocument.load(new Uint8Array(summaryBlob.getBytes()));
+  const mergedPdf = await PDFLib.PDFDocument.create();
+
+  const helveticaBold = await mergedPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const helvetica = await mergedPdf.embedFont(PDFLib.StandardFonts.Helvetica);
+
+  const [templatePage] = await mergedPdf.copyPages(mainDoc, [0]);
+  const summaryPages = await mergedPdf.copyPages(docSummary, docSummary.getPageIndices());
+
+  const totalPages = summaryPages.length;
+  // Stamped pages = pages 2..N (cover excluded). Used for the "Page X of Y"
+  // label so it counts only the stamped pages.
+  const stampedTotal = Math.max(totalPages - 1, 0);
+
+  for (let i = 0; i < totalPages; i++) {
+    if (i === 0) {
+      // Cover page — pass through untouched.
+      mergedPdf.addPage(summaryPages[i]);
+      continue;
+    }
+
+    const newPage = mergedPdf.addPage([templatePage.getWidth(), templatePage.getHeight()]);
+    const embeddedTemplate = await mergedPdf.embedPage(templatePage);
+    newPage.drawPage(embeddedTemplate);
+
+    const sPage = summaryPages[i];
+    const embeddedSheet = await mergedPdf.embedPage(sPage);
+
+    const scale = Math.min(templatePage.getWidth() / sPage.getWidth(), 1);
+    const xPos = (templatePage.getWidth() - (sPage.getWidth() * scale)) / 2;
+    const yPos = templatePage.getHeight() - (sPage.getHeight() * scale) - 55;
+
+    newPage.drawPage(embeddedSheet, {
+      x: xPos,
+      y: yPos,
+      width: sPage.getWidth() * scale,
+      height: sPage.getHeight() * scale,
+    });
+
+    const pageLabel = `Page ${i} of ${stampedTotal}`;
+    newPage.drawText(pageLabel, {
+      x: templatePage.getWidth() / 2 - 35,
+      y: 28,
+      size: 8,
+      font: helveticaBold,
+      color: PDFLib.rgb(0, 0, 0),
+    });
+
+    // Sheet-name footer (lower right)
+    if (pageTitle) {
+      const fontSize = 8.5;
+      const textWidth = helveticaBold.widthOfTextAtSize(pageTitle, fontSize);
+      newPage.drawText(pageTitle, {
+        x: templatePage.getWidth() - textWidth - 50,
+        y: 28,
+        size: fontSize,
+        font: helveticaBold,
+        color: PDFLib.rgb(0, 0, 0),
+      });
+    }
+
+    // Settings!C1 directly above the sheet-name in the footer.
+    if (headerC1) {
+      const c1FontSize = 8.5;
+      const c1Width = helveticaBold.widthOfTextAtSize(headerC1, c1FontSize);
+      newPage.drawText(headerC1, {
+        x: templatePage.getWidth() - c1Width - 50,
+        y: 40,
+        size: c1FontSize,
+        font: helveticaBold,
+        color: PDFLib.rgb(0, 0, 0),
+      });
+    }
+
+    // Top-right header (date + C3) — matches the appendix overlay style.
+    const headerFontSize = 10;
+    if (headerDate) {
+      const dateWidth = helvetica.widthOfTextAtSize(headerDate, headerFontSize);
+      newPage.drawText(headerDate, {
+        x: templatePage.getWidth() - dateWidth - 50,
+        y: templatePage.getHeight() - 30,
+        size: headerFontSize,
+        font: helvetica,
+        color: PDFLib.rgb(0, 0, 0),
+      });
+    }
+    if (headerC3) {
+      const c3Width = helvetica.widthOfTextAtSize(headerC3, headerFontSize);
+      newPage.drawText(headerC3, {
+        x: templatePage.getWidth() - c3Width - 50,
+        y: templatePage.getHeight() - 42,
+        size: headerFontSize,
+        font: helvetica,
+        color: PDFLib.rgb(0, 0, 0),
+      });
+    }
   }
   return Utilities.newBlob(await mergedPdf.save(), "application/pdf");
 }

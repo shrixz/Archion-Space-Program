@@ -1048,6 +1048,48 @@ function _purgeCoverTemplateCopies(ss) {
   });
 }
 
+/**
+ * Normalize a template sheet to exactly `targetRows` rows.
+ *  - If shorter, append blank rows at the bottom.
+ *  - If longer, trim trailing rows but ONLY when each is fully blank AND has
+ *    no merged ranges (so we never silently destroy designed footer content
+ *    or merged headers the user added).
+ *  - If real content still sits beyond targetRows after trimming, throw a
+ *    descriptive error so the caller surfaces it instead of letting a deep
+ *    "partially intersects a merge" exception fire later in the tile copy.
+ *
+ * `label` is used only in the error message ("Cover Template", "Summary
+ * Template", etc.).
+ */
+function _padOrTrimTemplateRows(sheet, targetRows, label) {
+  const current = sheet.getMaxRows();
+  if (current === targetRows) return;
+
+  if (current < targetRows) {
+    sheet.insertRowsAfter(current, targetRows - current);
+    return;
+  }
+
+  // current > targetRows — try to trim trailing blank, unmerged rows.
+  let safety = 200;
+  while (sheet.getMaxRows() > targetRows && safety-- > 0) {
+    const last = sheet.getMaxRows();
+    const cols = sheet.getMaxColumns();
+    const rowRange = sheet.getRange(last, 1, 1, cols);
+    const blank = rowRange.getValues()[0].every(v => v === "" || v === null);
+    const merged = rowRange.getMergedRanges().length > 0;
+    if (!blank || merged) break;
+    try { sheet.deleteRow(last); } catch (e) { break; }
+  }
+
+  if (sheet.getMaxRows() > targetRows) {
+    throw new Error(
+      `${label} has ${sheet.getMaxRows()} rows but the layout expects ${targetRows}. ` +
+      `Please remove the extra rows below row ${targetRows} (or move that content into rows 1-${targetRows}), then try again.`
+    );
+  }
+}
+
 /** * PART 4: AUTOMATED SUMMARY GENERATOR (Mimics code.gs but purely for sheet update)
  */
 function autoUpdateSummarySheet(newSheetName) {
@@ -1059,15 +1101,27 @@ function autoUpdateSummarySheet(newSheetName) {
 
   _purgeCoverTemplateCopies(ss);
 
+  // Defensive: ensure both templates are exactly REQUIRED_PAGE_HEIGHT rows.
+  // See _padOrTrimTemplateRows for the pad-vs-trim rules. autoUpdateSummarySheet
+  // is called from onEdit so swallow errors silently here — the explicit
+  // Create-Summary path in Code.js will surface them.
+  const REQUIRED_PAGE_HEIGHT = 34;
+  try {
+    _padOrTrimTemplateRows(template, REQUIRED_PAGE_HEIGHT, "Summary Template");
+    _padOrTrimTemplateRows(coverTemplate, REQUIRED_PAGE_HEIGHT, "Cover Template");
+  } catch (e) {
+    return; // Template still has content past row 34 — let the user fix it via Create Summary.
+  }
+
   const versionText = coverTemplate.getRange(10, 9).getDisplayValue();
   const dateText = coverTemplate.getRange(15, 9).getDisplayValue();
   const fullHeaderValue = versionText + "\n" + dateText;
-  const hospitalName = template.getRange("F30").getDisplayValue();
+  const hospitalName = template.getRange("F33").getDisplayValue();
 
   const existingSummary = ss.getSheetByName("Summary");
 
   // Snapshot col G notes keyed by (colA, colB) so they survive the rebuild.
-  // Col G is user-typed notes; not included in the PDF export but must persist.
+  // Col G is user-typed notes; included in the PDF export and must persist.
   const noteSnapshot = {};
   if (existingSummary) {
     try {
@@ -1109,9 +1163,9 @@ function autoUpdateSummarySheet(newSheetName) {
     target.insertColumnsAfter(target.getMaxColumns(), 7 - target.getMaxColumns());
   }
 
-  const PAGE_HEIGHT = 31;
+  const PAGE_HEIGHT = 34;
   const DATA_START_REL = 11;
-  const DATA_END_REL = 27;
+  const DATA_END_REL = 30;
   const ROWS_PER_PAGE = (DATA_END_REL - DATA_START_REL) + 1;
 
   const templateRowHeights = [];
@@ -1137,7 +1191,7 @@ function autoUpdateSummarySheet(newSheetName) {
       const headerCell = target.getRange(start, 6);
       headerCell.setValue(fullHeaderValue);
       headerCell.setWrap(true).setHorizontalAlignment("right").setVerticalAlignment("top");
-      target.getRange(start + 29, 6).setValue(hospitalName);
+      target.getRange(start + 32, 6).setValue(hospitalName);
       target.getRange(start + DATA_START_REL - 1, 1, ROWS_PER_PAGE, 5).clearContent();
     }
   }
@@ -1300,14 +1354,14 @@ function autoUpdateSummarySheet(newSheetName) {
   target.getRange(totalRow, 3).setValue(grandTotalC);
   target.getRange(totalRow, 5).setValue(grandTotalE);
 
-  const footerStartRow = (currentPage * PAGE_HEIGHT) + 30;
+  const footerStartRow = (currentPage * PAGE_HEIGHT) + 33;
   if (footerStartRow > totalRow + 1) {
     target.getRange(totalRow + 1, 1, footerStartRow - (totalRow + 1), 6).setBorder(false, false, false, false, false, false).clearContent();
   }
 
-  for (let p = 1; p <= currentPage; p++) {
-    target.getRange((p * PAGE_HEIGHT) + PAGE_HEIGHT, 3).setValue("Page " + p + " of " + currentPage).setHorizontalAlignment("center").setFontWeight("bold").setFontSize(9);
-  }
+  // NOTE: cell-drawn "Page X of Y" footer is intentionally NOT written here —
+  // the doc-template overlay (overlaySummary in Code.js) draws the page label
+  // on top of the template footer instead, matching the Appendix flow.
 
   // Restore col G notes onto matching rows of the rebuilt Summary.
   if (Object.keys(noteSnapshot).length > 0) {
